@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  SafeAreaView, Alert, ActivityIndicator, StatusBar, Share, RefreshControl,
+  SafeAreaView, Alert, ActivityIndicator, StatusBar, Share, RefreshControl, Switch
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { signOut } from '../../lib/auth';
+import { isBiometricEnabled, setBiometricEnabled, getBiometricLabel, isBiometricAvailable } from '../../utils/biometric';
 import { Ionicons } from '@expo/vector-icons';
 import LoadingScreen from '../../components/LoadingScreen';
 
@@ -19,17 +20,34 @@ function formatBowling(wickets: number, runs: number) {
 }
 
 export default function ProfileScreen() {
-  const { user, userName } = useAuth();
+  const { user, userName, refreshSession } = useAuth();
   const router = useRouter();
   const [stats, setStats] = useState({
-    runs: 0, wickets: 0, catches: 0, matches: 0,
+    runs: 0, wickets: 0, catches: 0, drops: 0, runOuts: 0, stumpings: 0, matches: 0,
     highestScore: 0, bestBowlingWkts: 0, bestBowlingRuns: 0, fifties: 0, sixes: 0, fours: 0,
   });
   const [recentMatches, setRecentMatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [bioEnabled, setBioEnabled] = useState(false);
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioLabel, setBioLabel] = useState('Face ID');
 
-  useEffect(() => { loadProfile(); }, [user]);
+  useEffect(() => { 
+    loadProfile(); 
+    isBiometricAvailable().then(avail => {
+      setBioAvailable(avail);
+      if (avail) {
+        getBiometricLabel().then(setBioLabel);
+        isBiometricEnabled().then(setBioEnabled);
+      }
+    });
+  }, [user]);
+
+  const toggleBiometric = async (val: boolean) => {
+    setBioEnabled(val);
+    await setBiometricEnabled(val);
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -41,58 +59,42 @@ export default function ProfileScreen() {
     if (!user) return;
     setLoading(true);
     try {
+      // Fetch recent matches
       const { data: playerSessions } = await (supabase.from('players') as any)
-        .select('session_id').eq('user_id', user.id);
+        .select('id, session_id').eq('user_id', user.id);
       const sessionIds = (playerSessions ?? []).map((p: any) => p.session_id);
 
       const { data: matchData } = await (supabase.from('matches') as any)
         .select('*, sessions(name, code)').in('session_id', sessionIds)
         .order('created_at', { ascending: false }).limit(10);
+        
+      const { count: totalMatches } = await (supabase.from('matches') as any)
+        .select('*', { count: 'exact', head: true }).in('session_id', sessionIds);
 
       setRecentMatches(matchData ?? []);
 
-      // Aggregate ball-by-ball stats
-      const { data: battingBalls } = await (supabase.from('balls') as any)
-        .select('runs_off_bat, is_wicket, extra_type, innings_id, over_number')
-        .eq('batsman_id', user.id);
-
-      const { data: bowlingBalls } = await (supabase.from('balls') as any)
-        .select('runs_off_bat, extras, is_wicket, wicket_type, extra_type, innings_id, bowler_id')
-        .eq('bowler_id', user.id);
-
-      let totalRuns = 0, totalFours = 0, totalSixes = 0, highestScore = 0, fifties = 0;
-      // Group by innings to find highest score
-      const inningsMap: Record<string, number> = {};
-      for (const b of battingBalls ?? []) {
-        if (b.extra_type !== 'wide') {
-          const r = b.runs_off_bat ?? 0;
-          totalRuns += r;
-          if (r === 4) totalFours++;
-          if (r === 6) totalSixes++;
-          inningsMap[b.innings_id] = (inningsMap[b.innings_id] ?? 0) + r;
-        }
-      }
-      highestScore = Math.max(0, ...Object.values(inningsMap));
-      fifties = Object.values(inningsMap).filter(s => s >= 50).length;
-
-      let totalWickets = 0, bestW = 0, bestR = 999;
-      const bowlInningsMap: Record<string, { w: number; r: number }> = {};
-      for (const b of bowlingBalls ?? []) {
-        const isWkt = b.is_wicket && b.wicket_type !== 'runout' && b.wicket_type !== 'retiredhurt';
-        const runs = (b.runs_off_bat ?? 0) + (b.extras ?? 0);
-        if (!bowlInningsMap[b.innings_id]) bowlInningsMap[b.innings_id] = { w: 0, r: 0 };
-        bowlInningsMap[b.innings_id].r += runs;
-        if (isWkt) { bowlInningsMap[b.innings_id].w++; totalWickets++; }
-      }
-      for (const v of Object.values(bowlInningsMap)) {
-        if (v.w > bestW || (v.w === bestW && v.r < bestR)) { bestW = v.w; bestR = v.r; }
-      }
+      // Fetch pre-calculated career stats
+      const [{ data: userRec }, { data: batStat }, { data: bowlStat }, { data: fieldStat }] = await Promise.all([
+        (supabase.from('users') as any).select('matches_played').eq('id', user.id).maybeSingle(),
+        (supabase.from('batting_career_stats') as any).select('*').eq('user_id', user.id).maybeSingle(),
+        (supabase.from('bowling_career_stats') as any).select('*').eq('user_id', user.id).maybeSingle(),
+        (supabase.from('fielding_career_stats') as any).select('*').eq('user_id', user.id).maybeSingle(),
+      ]);
 
       setStats({
-        runs: totalRuns, wickets: totalWickets, catches: 0,
-        matches: (matchData ?? []).length, highestScore, fifties,
-        bestBowlingWkts: bestW, bestBowlingRuns: bestR === 999 ? 0 : bestR,
-        sixes: totalSixes, fours: totalFours,
+        runs: batStat?.runs ?? 0, 
+        wickets: bowlStat?.wickets ?? 0, 
+        catches: fieldStat?.catches ?? 0,
+        drops: fieldStat?.dropped_catches ?? 0,
+        runOuts: fieldStat?.run_outs ?? 0,
+        stumpings: fieldStat?.stumpings ?? 0,
+        matches: totalMatches ?? userRec?.matches_played ?? 0, 
+        highestScore: batStat?.highest_score ?? 0, 
+        fifties: batStat?.fifties ?? 0,
+        bestBowlingWkts: bowlStat?.best_bowling_wickets ?? 0, 
+        bestBowlingRuns: bowlStat?.best_bowling_runs ?? 0,
+        sixes: batStat?.sixes ?? 0, 
+        fours: batStat?.fours ?? 0,
       });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -101,7 +103,10 @@ export default function ProfileScreen() {
   const handleSignOut = async () => {
     Alert.alert('Sign Out', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: async () => { await signOut(); router.replace('/login'); } },
+      { text: 'Sign Out', style: 'destructive', onPress: async () => { 
+        await signOut(); 
+        await refreshSession(); 
+      } },
     ]);
   };
 
@@ -195,9 +200,57 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* Recent Matches */}
           <View style={C.section}>
-            <Text style={C.sectionTitle}>RECENT MATCHES</Text>
+            <Text style={C.sectionTitle}>CAREER FIELDING</Text>
+            <View style={C.statsGrid}>
+              {[
+                { icon: '🤲', label: 'Catches', value: stats.catches, color: '#1a8a3e' },
+                { icon: '💔', label: 'Drops', value: stats.drops, color: '#ef4444' },
+                { icon: '🏃', label: 'Run Outs', value: stats.runOuts, color: '#b8860b' },
+                { icon: '🧤', label: 'Stumpings', value: stats.stumpings, color: '#7030a0' },
+              ].map(s => (
+                <View key={s.label} style={C.statCard}>
+                  <Text style={{ fontSize: 22, marginBottom: 6 }}>{s.icon}</Text>
+                  <Text style={[C.statVal, { color: s.color }]}>{s.value}</Text>
+                  <Text style={C.statLbl}>{s.label}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {/* Security */}
+          <View style={[C.section, { marginBottom: 30 }]}>
+            <Text style={C.sectionTitle}>SECURITY</Text>
+            
+            <TouchableOpacity style={C.settingsRow} onPress={() => router.push('/update-password')}>
+              <View style={C.settingsInfo}>
+                <Text style={C.settingsLabel}>Update Password</Text>
+                <Text style={C.settingsDesc}>Change your account login password</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#9A9390" />
+            </TouchableOpacity>
+
+            {bioAvailable && (
+              <>
+                <View style={C.heroMiniDivider} />
+                <View style={C.settingsRow}>
+                  <View style={C.settingsInfo}>
+                    <Text style={C.settingsLabel}>Unlock with {bioLabel}</Text>
+                    <Text style={C.settingsDesc}>Sign in instantly without a password</Text>
+                  </View>
+                  <Switch
+                    value={bioEnabled}
+                    onValueChange={toggleBiometric}
+                    trackColor={{ false: '#D9D5CD', true: '#810100' }}
+                    thumbColor={'#FFFFFF'}
+                  />
+                </View>
+              </>
+            )}
+          </View>
+
+          <View style={C.section}>
+              <Text style={C.sectionTitle}>RECENT MATCHES</Text>
             {recentMatches.length === 0 ? (
               <View style={C.emptyCard}>
                 <Text style={{ fontSize: 32, marginBottom: 8 }}>🎯</Text>
@@ -278,4 +331,9 @@ const C = StyleSheet.create({
   badgeDone: { backgroundColor: '#F5F3EC' },
   badgeLive: { backgroundColor: 'rgba(129,1,0,0.08)' },
   matchBadgeText: { fontSize: 11, fontFamily: 'Outfit_800ExtraBold', textTransform: 'uppercase', letterSpacing: 0.5 },
+
+  settingsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', padding: 16, borderRadius: 16, shadowColor: '#1B1716', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 1 },
+  settingsInfo: { flex: 1, paddingRight: 16 },
+  settingsLabel: { color: '#1B1716', fontSize: 16, fontFamily: 'Outfit_700Bold', marginBottom: 2 },
+  settingsDesc: { color: '#9A9390', fontSize: 13, fontFamily: 'Outfit_400Regular' },
 });

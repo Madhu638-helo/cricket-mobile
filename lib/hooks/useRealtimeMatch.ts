@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { AppState } from 'react-native';
 import { supabase } from '../supabase';
 import type { Ball, Innings, Match, Player, Team } from '../../types/cricket';
 
@@ -93,6 +94,7 @@ export function useRealtimeMatch(matchCode: string): RealtimeMatchData {
   useEffect(() => {
     // Kick off initial data load
     fetchInitialRef.current();
+    const hadFirstSubscribe = { current: false };
 
     const CHANNEL = `match:${matchCode}`;
 
@@ -141,6 +143,14 @@ export function useRealtimeMatch(matchCode: string): RealtimeMatchData {
       // ── DB: match status changes ──────────────────────────────────────────
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matches' }, (payload: any) => {
         if (sessionIdRef.current && payload.new?.session_id !== sessionIdRef.current) return;
+        // When match transitions to innings_2 or result, do a full refetch
+        // so all clients (especially viewers) get the latest innings, balls, etc.
+        const prevStatus = payload.old?.status;
+        const newStatus = payload.new?.status;
+        if (prevStatus !== newStatus && ['innings_break', 'innings_2', 'result'].includes(newStatus)) {
+          fetchInitialRef.current();
+          return;
+        }
         setMatch(prev => {
           if (prev?.id === payload.new?.id) return { ...prev, ...payload.new } as Match;
           if (!prev) fetchInitialRef.current();
@@ -205,11 +215,26 @@ export function useRealtimeMatch(matchCode: string): RealtimeMatchData {
         if (t) setTeams(t);
       })
 
-      .subscribe();
+      .subscribe((status: string) => {
+        // On every REconnect, refetch — postgres_changes missed while the
+        // socket was down (app backgrounded) are NOT replayed by Supabase.
+        // The first SUBSCRIBED is skipped: the mount fetch above covers it.
+        if (status === 'SUBSCRIBED') {
+          if (hadFirstSubscribe.current) fetchInitialRef.current();
+          hadFirstSubscribe.current = true;
+        }
+      });
 
     channelRef.current = channel;
 
+    // Refetch when the app returns to the foreground — innings transitions and
+    // match results announced while backgrounded would otherwise never appear.
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') fetchInitialRef.current();
+    });
+
     return () => {
+      appStateSub.remove();
       supabase.removeChannel(channel);
       channelRef.current = null;
     };

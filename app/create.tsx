@@ -57,7 +57,7 @@ export default function CreateMatchScreen() {
       const { data: match } = await supabase.from('matches').insert({
         session_id: sess.id,
         match_number: 1,
-        status: 'toss',
+        status: 'setup',
         overs: oversNum,
         team1_id: t1.id,
         team2_id: t2.id,
@@ -65,7 +65,7 @@ export default function CreateMatchScreen() {
 
       if (!match) throw new Error('Failed to create match');
 
-      router.replace(`/match/${code}/toss`);
+      router.replace(`/match/${code}/lobby`);
     } catch (e: any) {
       Alert.alert('Error', e.message);
     } finally {

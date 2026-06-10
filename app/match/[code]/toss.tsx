@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator, Alert, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator, Alert, ScrollView, RefreshControl } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { sendLocalNotification } from '../../../lib/notifications';
 import { supabase } from '../../../lib/supabase';
 import { useRealtimeMatch } from '../../../lib/hooks/useRealtimeMatch';
 import { useAuth } from '../../../context/AuthContext';
@@ -12,10 +13,17 @@ export default function TossScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
   const { user } = useAuth();
-  const { session, match, teams, players, loading } = useRealtimeMatch(code);
+  const { session, match, teams, players, loading, refetch } = useRealtimeMatch(code);
   const [tossWinnerId, setTossWinnerId] = useState('');
   const [decision, setDecision] = useState<'bat' | 'bowl' | ''>('');
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   const isOwner = session?.owner_id === user?.id;
   const tossWinner = teams.find(t => t.id === tossWinnerId);
@@ -66,6 +74,7 @@ export default function TossScreen() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to confirm toss');
+      sendLocalNotification('Match Started! 🏏', 'The toss is complete. Play ball!');
       router.replace(`/match/${code}`);
     } catch (e: any) {
       Alert.alert('Error', e.message);
@@ -81,10 +90,13 @@ export default function TossScreen() {
   // ── Non-owner waiting screen ──────────────────────────────────────────────
   if (!isOwner) {
     // Show toss result if the owner has already confirmed the toss
+    // IMPORTANT: also check match.status !== 'toss' — toss_winner_id/toss_decision may have
+    // stale values from a previous match or race condition. Only show result when the
+    // backend has actually processed the toss and moved status to innings_1.
     const tossWinnerTeam = match?.toss_winner_id ? teams.find(t => t.id === match.toss_winner_id) : null;
     const tossDecision = (match as any)?.toss_decision as 'bat' | 'bowl' | undefined;
     const otherTeam = tossWinnerTeam ? teams.find(t => t.id !== tossWinnerTeam.id) : null;
-    const tossConfirmed = !!(tossWinnerTeam && tossDecision);
+    const tossConfirmed = !!(tossWinnerTeam && tossDecision && match?.status !== 'toss');
 
     return (
       <View style={S.screen}>
@@ -151,7 +163,11 @@ export default function TossScreen() {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={S.content} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          contentContainerStyle={S.content} 
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#810100" colors={['#810100']} />}
+        >
 
           {/* Coin */}
           <View style={S.coinArea}>

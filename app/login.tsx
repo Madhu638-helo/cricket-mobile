@@ -8,36 +8,39 @@ import { signIn, signUp } from '../lib/auth';
 import { useAuth } from '../context/AuthContext';
 import { useRouter } from 'expo-router';
 
+import LoadingScreen from '../components/LoadingScreen';
+
 export default function LoginScreen() {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const { refreshSession } = useAuth();
+  const { refreshSession, promptBiometricSetup } = useAuth();
   const router = useRouter();
 
   const handleSubmit = async () => {
     if (!username || !password) { Alert.alert('Error', 'Username and password are required'); return; }
-    if (mode === 'register' && !name) { Alert.alert('Error', 'Name is required'); return; }
     setLoading(true);
     try {
-      if (mode === 'login') {
-        const { error } = await signIn(username, password);
-        if (error) { Alert.alert('Login Failed', error.message); return; }
-      } else {
-        const { error } = await signUp(username, password, name);
-        if (error) { Alert.alert('Registration Failed', error.message); return; }
+      const { error } = await signIn(username, password);
+      if (error) { 
+        Alert.alert('Login Failed', error.message); 
+        setLoading(false);
+        return; 
       }
+
       await refreshSession();
+      await promptBiometricSetup();
       router.replace('/');
     } catch (e: any) {
       Alert.alert('Error', e.message);
-    } finally {
       setLoading(false);
     }
   };
+
+  if (loading) {
+    return <LoadingScreen message="Authenticating..." />;
+  }
 
   return (
     <KeyboardAvoidingView style={C.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -48,40 +51,17 @@ export default function LoginScreen() {
           <View style={C.ballIcon}>
             <Text style={{ fontSize: 36 }}>🏏</Text>
           </View>
-          <Text style={C.brand}>TURF</Text>
+          <Text style={C.brand}>CRICPRO</Text>
           <Text style={C.brandSub}>Cricket Score Pro</Text>
           <Text style={C.tagline}>Score. Watch. Celebrate.</Text>
         </View>
 
         {/* Card */}
         <View style={C.card}>
-          {/* Tab Toggle */}
-          <View style={C.toggle}>
-            {(['login', 'register'] as const).map(m => (
-              <TouchableOpacity key={m} style={[C.toggleBtn, mode === m && C.toggleActive]} onPress={() => setMode(m)}>
-                <Text style={[C.toggleText, mode === m && C.toggleTextActive]}>
-                  {m === 'login' ? 'Sign In' : 'Register'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {mode === 'register' && (
-            <View style={C.field}>
-              <Text style={C.label}>YOUR NAME</Text>
-              <TextInput
-                style={C.input} value={name} onChangeText={setName}
-                placeholder="e.g. Virat Kohli" placeholderTextColor="#9A9390"
-                autoCapitalize="words"
-              />
-            </View>
-          )}
-
           <View style={C.field}>
             <Text style={C.label}>USERNAME</Text>
             <TextInput
               style={C.input} value={username} onChangeText={setUsername}
-              placeholder="shree_116" placeholderTextColor="#9A9390"
               autoCapitalize="none"
             />
           </View>
@@ -91,7 +71,6 @@ export default function LoginScreen() {
             <View style={C.passwordRow}>
               <TextInput
                 style={C.passwordInput} value={password} onChangeText={setPassword}
-                placeholder="••••••••" placeholderTextColor="#9A9390"
                 secureTextEntry={!showPassword}
               />
               <TouchableOpacity style={C.eyeBtn} onPress={() => setShowPassword(!showPassword)}>
@@ -104,12 +83,12 @@ export default function LoginScreen() {
             {loading ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={C.submitText}>{mode === 'login' ? 'Sign In →' : 'Create Account →'}</Text>
+              <Text style={C.submitText}>Sign In →</Text>
             )}
           </TouchableOpacity>
         </View>
 
-        <Text style={C.footer}>© 2025 Turf Cricket · Built for real cricketers</Text>
+        <Text style={C.footer}>© 2026 CricPro · Built for real cricketers</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

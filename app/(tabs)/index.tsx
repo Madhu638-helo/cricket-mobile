@@ -4,9 +4,13 @@ import {
   TextInput, SafeAreaView, RefreshControl, StatusBar, Animated,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { formatOvers } from '../../lib/cricket/engine';
+import { EmptyState } from '../../components/EmptyState';
+import { Skeleton } from '../../components/Skeleton';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function initials(name: string) {
@@ -18,9 +22,9 @@ function abbr(name: string) {
   return w.length === 1 ? name.slice(0, 3).toUpperCase() : w.map(x => x[0]).join('').toUpperCase().slice(0, 4);
 }
 function greeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good Morning';
-  if (h < 17) return 'Good Afternoon';
+  const hr = new Date().getHours();
+  if (hr < 12) return 'Good Morning';
+  if (hr < 18) return 'Good Afternoon';
   return 'Good Evening';
 }
 
@@ -79,7 +83,20 @@ export default function HomeScreen() {
   const [recentMatches, setRecentMatches] = useState<any[]>([]);
   const [stats, setStats] = useState({ runs: 0, wickets: 0, catches: 0, mvps: 0 });
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
   const scrollY = useRef(new Animated.Value(0)).current;
+
+  // Header Animation Interpolations
+  const headerTranslateY = scrollY.interpolate({
+    inputRange: [0, 150],
+    outputRange: [0, -80],
+    extrapolate: 'clamp',
+  });
+  const heroOpacity = scrollY.interpolate({
+    inputRange: [0, 100],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
 
   const loadDashboard = async () => {
     if (!user) return;
@@ -113,7 +130,7 @@ export default function HomeScreen() {
 
       if (['innings_1', 'innings_2', 'innings_break'].includes(m.status)) {
         live.push({
-          code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
+          id: m.id, code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
           battingTeamName: battingTeam?.name ?? 'TBD', bowlingTeamName: bowlingTeam?.name ?? 'TBD',
           runs: activeInn?.total_runs ?? 0, wickets: activeInn?.total_wickets ?? 0,
           overs: activeInn ? formatOvers(activeInn.total_balls) : '0.0', crr,
@@ -122,7 +139,7 @@ export default function HomeScreen() {
       } else if (['toss', 'setup', 'lobby'].includes(m.status) || sess.status === 'lobby') {
         // lobby = session exists but match not started; toss/setup = match started config
         upcoming.push({
-          code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
+          id: m.id, code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
           format: `${m.overs} ov`, playerCount,
           status: m.status === 'toss' ? 'Toss' : m.status === 'setup' ? 'Setup' : 'Lobby',
         });
@@ -132,7 +149,7 @@ export default function HomeScreen() {
         const team2 = (teams ?? []).find((t: any) => t.id === m.team2_id);
         const winner = (teams ?? []).find((t: any) => t.id === m.winner_id);
         recent.push({
-          code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
+          id: m.id, code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
           result: m.result ?? (winner ? `${winner.name} won` : 'Completed'),
           team1Name: team1?.name ?? '—', team2Name: team2?.name ?? '—',
         });
@@ -145,35 +162,32 @@ export default function HomeScreen() {
       if (!hasEntry && sess.status === 'lobby') {
         const playerCount = (allSessionPlayers ?? []).filter((p: any) => p.session_id === sess.id).length;
         upcoming.push({
-          code: sess.code, matchName: sess.name || 'Upcoming Match',
+          id: sess.id, code: sess.code, matchName: sess.name || 'Upcoming Match',
           format: '—', playerCount, status: 'Lobby',
         });
       }
     }
 
-    // Deduplicate by code before setting state to prevent React key collisions
-    const dedup = (arr: any[]) => [...new Map(arr.map(m => [m.code, m])).values()];
+    // Deduplicate by id to prevent React key collisions (allows multiple matches per session)
+    const dedup = (arr: any[]) => [...new Map(arr.map(m => [m.id, m])).values()];
     setLiveMatches(dedup(live));
     setUpcomingMatches(dedup(upcoming));
     setRecentMatches(dedup(recent));
 
-    // Fix H-2: batsman_id stores player.id (not user.id). Collect the user's player UUIDs
-    // from the myPlayers array already fetched above, then query balls by those IDs.
-    const myPlayerIds = (myPlayers ?? []).map((p: any) => p.id).filter(Boolean);
-    if (myPlayerIds.length > 0) {
-      const [{ data: battingBalls }, { data: bowlingBalls }] = await Promise.all([
-        (supabase.from('balls') as any)
-          .select('runs_off_bat, is_wicket')
-          .in('batsman_id', myPlayerIds),
-        (supabase.from('balls') as any)
-          .select('is_wicket, bowler_id')
-          .in('bowler_id', myPlayerIds)
-          .eq('is_wicket', true),
-      ]);
-      const runs = (battingBalls ?? []).reduce((s: number, b: any) => s + (b.runs_off_bat ?? 0), 0);
-      const wickets = (bowlingBalls ?? []).length;
-      setStats({ runs, wickets, catches: 0, mvps: 0 });
-    }
+    // Read directly from the career stats tables which are updated efficiently by the backend
+    const [{ data: batStat }, { data: bowlStat }, { data: fieldStat }] = await Promise.all([
+      (supabase.from('batting_career_stats') as any).select('runs').eq('user_id', user.id).maybeSingle(),
+      (supabase.from('bowling_career_stats') as any).select('wickets').eq('user_id', user.id).maybeSingle(),
+      (supabase.from('fielding_career_stats') as any).select('catches').eq('user_id', user.id).maybeSingle(),
+    ]);
+
+    setStats({ 
+      runs: batStat?.runs ?? 0, 
+      wickets: bowlStat?.wickets ?? 0, 
+      catches: fieldStat?.catches ?? 0, 
+      mvps: 0 
+    });
+    setLoading(false);
   };
 
   useEffect(() => { loadDashboard(); }, [user]);
@@ -187,8 +201,9 @@ export default function HomeScreen() {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => loadDashboard(), 600);
     };
+    const channelName = `home_realtime_${Math.random().toString(36).substring(7)}`;
     const channel = supabase
-      .channel('home_realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'innings' }, refresh)
@@ -200,39 +215,110 @@ export default function HomeScreen() {
     };
   }, [user]);
 
+  // Ball-by-ball broadcast: subscribe to each live match's broadcast channel
+  // so the home banner score updates instantly (not just at over boundaries).
+  const liveBroadcastRefs = useRef<any[]>([]);
+  useEffect(() => {
+    // Clean up old channels
+    liveBroadcastRefs.current.forEach(ch => supabase.removeChannel(ch));
+    liveBroadcastRefs.current = [];
+
+    if (liveMatches.length === 0) return;
+
+    for (const m of liveMatches) {
+      // MUST be the same topic the scorer broadcasts on (`match:<code>`) —
+      // Supabase broadcast only delivers within the same channel topic. A
+      // differently-named channel here receives nothing.
+      const channelName = `match:${m.code}`;
+      // Don't double-subscribe if a channel with this topic already exists
+      const existing = supabase.getChannels().find(ch => ch.topic === `realtime:${channelName}`);
+      if (existing) continue;
+
+      const ch = supabase.channel(channelName, {
+        config: { broadcast: { self: true } },
+      })
+        .on('broadcast', { event: 'score_update' }, (payload: any) => {
+          const { innings_id, runs, wickets, balls: totalBalls } = payload.payload ?? {};
+          if (!innings_id) return;
+          // Update the liveMatches state with the new score
+          setLiveMatches(prev => prev.map(lm => {
+            if (lm.code !== m.code) return lm;
+            const newRuns = Math.max(lm.runs, runs ?? 0);
+            const newWickets = Math.max(lm.wickets, wickets ?? 0);
+            const newBalls = totalBalls ?? lm._totalBalls ?? 0;
+            const newCrr = newBalls > 0 ? Math.round((newRuns / (newBalls / 6)) * 100) / 100 : 0;
+            return {
+              ...lm,
+              runs: newRuns,
+              wickets: newWickets,
+              overs: formatOvers(newBalls),
+              crr: newCrr,
+              _totalBalls: newBalls,
+            };
+          }));
+        })
+        .subscribe();
+      liveBroadcastRefs.current.push(ch);
+    }
+
+    return () => {
+      liveBroadcastRefs.current.forEach(ch => supabase.removeChannel(ch));
+      liveBroadcastRefs.current = [];
+    };
+  }, [liveMatches.map(m => m.code).join(',')]);
+
   const onRefresh = async () => { setRefreshing(true); await loadDashboard(); setRefreshing(false); };
   const handleJoin = () => { if (joinCode.length >= 4) router.push(`/join?code=${joinCode}`); };
 
   return (
     <View style={C.screen}>
       <StatusBar barStyle="light-content" backgroundColor="#810100" />
-      <ScrollView
+      
+      {/* iOS Overscroll red background trick */}
+      <View style={{ position: 'absolute', top: -1000, left: 0, right: 0, height: 1000, backgroundColor: '#810100' }} />
+
+      <Animated.ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#810100" colors={['#810100']} />}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: true }
+        )}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh} 
+            tintColor="#FFFFFF" 
+            colors={['#810100']} 
+            progressBackgroundColor="#FFFFFF"
+          />
+        }
       >
         {/* ── Hero ── */}
-        <View style={C.hero}>
-          {/* Gradient using layered views */}
-          <View style={C.heroBg} />
+        <Animated.View style={[C.hero, { transform: [{ translateY: headerTranslateY }] }]}>
+          <LinearGradient
+            colors={['#810100', '#4A0000']}
+            style={StyleSheet.absoluteFillObject}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          />
           <View style={C.heroPattern} />
+          
           <SafeAreaView>
-            <View style={C.heroContent}>
+            <Animated.View style={[C.heroContent, { opacity: heroOpacity }]}>
               <View style={C.heroTop}>
-                <View>
-                  <Text style={C.brandName}>TURF</Text>
-                  <Text style={C.brandTag}>Cricket · Live</Text>
-                </View>
+                <Text style={C.brandBadge}>CRICPRO</Text>
                 <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={C.avatarBtn}>
                   <Text style={C.avatarText}>{userName ? initials(userName) : '?'}</Text>
                 </TouchableOpacity>
               </View>
               <View style={C.heroBottom}>
-                <Text style={C.heroGreeting}>{greeting()}</Text>
+                <Text style={C.heroGreeting}>{greeting()},</Text>
                 <Text style={C.heroName}>{userName || 'Player'} 👋</Text>
               </View>
-            </View>
+            </Animated.View>
           </SafeAreaView>
-        </View>
+        </Animated.View>
 
         <View style={C.content}>
           {/* ── CTA Row ── */}
@@ -272,15 +358,20 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {liveMatches.length === 0 ? (
-              <View style={C.emptyCard}>
-                <Text style={C.emptyIcon}>🏏</Text>
-                <Text style={C.emptyTitle}>No live matches</Text>
-                <Text style={C.emptyDesc}>Create or join a match to get started</Text>
+            {loading ? (
+              <View>
+                <Skeleton height={140} borderRadius={24} style={{ marginBottom: 16 }} />
+                <Skeleton height={140} borderRadius={24} style={{ marginBottom: 16 }} />
               </View>
+            ) : liveMatches.length === 0 ? (
+              <EmptyState 
+                icon="radio-outline" 
+                title="No live matches" 
+                message="Create or join a match to get started." 
+              />
             ) : (
               liveMatches.map(m => (
-                <TouchableOpacity key={m.code} style={C.liveCard} activeOpacity={0.85}
+                <TouchableOpacity key={m.id} style={C.liveCard} activeOpacity={0.85}
                   onPress={() => router.push(`/match/${m.code}`)}>
                   <View style={C.liveCardTop}>
                     <View style={C.liveRow}>
@@ -320,57 +411,77 @@ export default function HomeScreen() {
           </View>
 
           {/* ── UPCOMING ── */}
-          {upcomingMatches.length > 0 && (
+          {(loading || upcomingMatches.length > 0) && (
             <View style={C.section}>
               <View style={C.sectionHeader}>
                 <Text style={C.sectionLabel}>UPCOMING</Text>
-                <View style={C.upcomingBadge}><Text style={C.upcomingBadgeText}>{upcomingMatches.length}</Text></View>
+                {upcomingMatches.length > 0 && <View style={C.upcomingBadge}><Text style={C.upcomingBadgeText}>{upcomingMatches.length}</Text></View>}
               </View>
-              {upcomingMatches.map(m => (
-                <TouchableOpacity key={m.code} style={C.upcomingCard} activeOpacity={0.85}
-                  onPress={() => router.push(`/match/${m.code}/lobby`)}>
-                  <View style={C.upcomingIcon}>
-                    <Text style={{ fontSize: 20 }}>{m.status === 'Toss' ? '🪙' : m.status === 'Lobby' ? '⏳' : '⚙️'}</Text>
-                  </View>
-                  <View style={C.upcomingBody}>
-                    <Text style={C.upcomingName}>{m.matchName}</Text>
-                    <View style={C.upcomingMeta}>
-                      {m.format !== '—' && <Text style={C.upcomingFormat}>{m.format}</Text>}
-                      <View style={[C.upcomingStatusBadge, m.status === 'Toss' ? C.statusToss : m.status === 'Setup' ? C.statusSetup : C.statusLobby]}>
-                        <Text style={[C.upcomingStatusText, { color: m.status === 'Toss' ? '#8200c8' : m.status === 'Setup' ? '#0071e3' : '#e67e00' }]}>{m.status}</Text>
-                      </View>
-                      <Text style={C.upcomingPlayers}>· {m.playerCount} joined</Text>
+              {loading ? (
+                <View>
+                  <Skeleton height={80} borderRadius={16} style={{ marginBottom: 12 }} />
+                  <Skeleton height={80} borderRadius={16} style={{ marginBottom: 12 }} />
+                </View>
+              ) : upcomingMatches.length === 0 ? (
+                <EmptyState icon="calendar-outline" title="No upcoming matches" message="You haven't joined any matches yet." />
+              ) : (
+                upcomingMatches.map(m => (
+                  <TouchableOpacity key={m.id} style={C.upcomingCard} activeOpacity={0.85}
+                    onPress={() => router.push(`/match/${m.code}/lobby`)}>
+                    <View style={C.upcomingIcon}>
+                      <Text style={{ fontSize: 20 }}>{m.status === 'Toss' ? '🪙' : m.status === 'Lobby' ? '⏳' : '⚙️'}</Text>
                     </View>
-                  </View>
-                  <Text style={C.upcomingArrow}>›</Text>
-                </TouchableOpacity>
-              ))}
+                    <View style={C.upcomingBody}>
+                      <Text style={C.upcomingName}>{m.matchName}</Text>
+                      <View style={C.upcomingMeta}>
+                        {m.format !== '—' && <Text style={C.upcomingFormat}>{m.format}</Text>}
+                        <View style={[C.upcomingStatusBadge, m.status === 'Toss' ? C.statusToss : m.status === 'Setup' ? C.statusSetup : C.statusLobby]}>
+                          <Text style={[C.upcomingStatusText, { color: m.status === 'Toss' ? '#8200c8' : m.status === 'Setup' ? '#0071e3' : '#e67e00' }]}>{m.status}</Text>
+                        </View>
+                        <Text style={C.upcomingPlayers}>· {m.playerCount} joined</Text>
+                      </View>
+                    </View>
+                    <Text style={C.upcomingArrow}>›</Text>
+                  </TouchableOpacity>
+                ))
+              )}
             </View>
           )}
 
           {/* ── RECENT ── */}
-          {recentMatches.length > 0 && (
+          {(loading || recentMatches.length > 0) && (
             <View style={C.section}>
               <View style={C.sectionHeader}>
                 <Text style={C.sectionLabel}>RECENT</Text>
-                <View style={[C.upcomingBadge, { backgroundColor: 'rgba(99,1,2,0.08)' }]}>
-                  <Text style={[C.upcomingBadgeText, { color: '#810100' }]}>{recentMatches.length}</Text>
-                </View>
+                {recentMatches.length > 0 && (
+                  <View style={[C.upcomingBadge, { backgroundColor: 'rgba(99,1,2,0.08)' }]}>
+                    <Text style={[C.upcomingBadgeText, { color: '#810100' }]}>{recentMatches.length}</Text>
+                  </View>
+                )}
               </View>
-              {recentMatches.map(m => (
-                <TouchableOpacity key={m.code} style={[C.upcomingCard, { borderLeftWidth: 3, borderLeftColor: '#1a8a3e' }]} activeOpacity={0.85}
-                  onPress={() => router.push(`/match/${m.code}/result` as any)}>
-                  <View style={[C.upcomingIcon, { backgroundColor: 'rgba(26,138,62,0.10)' }]}>
-                    <Text style={{ fontSize: 20 }}>✅</Text>
-                  </View>
-                  <View style={C.upcomingBody}>
-                    <Text style={C.upcomingName}>{m.matchName}</Text>
-                    <Text style={[C.upcomingPlayers, { color: '#1a8a3e', fontFamily: 'Outfit_700Bold' }]}>{m.result}</Text>
-                    <Text style={[C.upcomingPlayers, { marginTop: 2 }]}>{m.team1Name} vs {m.team2Name}</Text>
-                  </View>
-                  <Text style={[C.upcomingArrow, { color: '#1a8a3e' }]}>›</Text>
-                </TouchableOpacity>
-              ))}
+              {loading ? (
+                <View>
+                  <Skeleton height={80} borderRadius={16} style={{ marginBottom: 12 }} />
+                  <Skeleton height={80} borderRadius={16} style={{ marginBottom: 12 }} />
+                </View>
+              ) : recentMatches.length === 0 ? (
+                <EmptyState icon="time-outline" title="No recent matches" message="Complete a match to see it here." />
+              ) : (
+                recentMatches.map(m => (
+                  <TouchableOpacity key={m.id} style={[C.upcomingCard, { borderLeftWidth: 3, borderLeftColor: '#1a8a3e' }]} activeOpacity={0.85}
+                    onPress={() => router.push(`/match/${m.code}/result` as any)}>
+                    <View style={[C.upcomingIcon, { backgroundColor: 'rgba(26,138,62,0.10)' }]}>
+                      <Text style={{ fontSize: 20 }}>✅</Text>
+                    </View>
+                    <View style={C.upcomingBody}>
+                      <Text style={C.upcomingName}>{m.matchName}</Text>
+                      <Text style={[C.upcomingPlayers, { color: '#1a8a3e', fontFamily: 'Outfit_700Bold' }]}>{m.result}</Text>
+                      <Text style={[C.upcomingPlayers, { marginTop: 2 }]}>{m.team1Name} vs {m.team2Name}</Text>
+                    </View>
+                    <Text style={[C.upcomingArrow, { color: '#1a8a3e' }]}>›</Text>
+                  </TouchableOpacity>
+                ))
+              )}
             </View>
           )}
 
@@ -399,30 +510,25 @@ export default function HomeScreen() {
 
           <View style={{ height: 24 }} />
         </View>
-      </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────────
 const C = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#EDEBDE' },
 
   // Hero
-  hero: { overflow: 'hidden' },
-  heroBg: { ...StyleSheet.absoluteFillObject, backgroundColor: '#810100' },
-  // Subtle diagonal tint — top-right corner darker for depth, no harsh split
-  heroPattern: { ...StyleSheet.absoluteFillObject, backgroundColor: '#5a0000', opacity: 0.35, borderRadius: 0 },
-  heroContent: { padding: 20, paddingBottom: 28 },
-  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  brandName: { color: '#FFFFFF', fontSize: 28, fontFamily: 'Outfit_900Black', letterSpacing: 4 },
-  brandTag: { color: 'rgba(255,255,255,0.60)', fontSize: 11, fontFamily: 'Outfit_600SemiBold', letterSpacing: 2, marginTop: 2 },
-  // White circle avatar — fully opaque so initials are crisp on any bg
-  avatarBtn: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.18, shadowRadius: 6, elevation: 4 },
-  avatarText: { color: '#810100', fontFamily: 'Outfit_900Black', fontSize: 15 },
-  heroBottom: { marginTop: 22 },
-  heroGreeting: { color: 'rgba(255,255,255,0.70)', fontSize: 11, fontFamily: 'Outfit_700Bold', letterSpacing: 1.5, textTransform: 'uppercase' },
-  heroName: { color: '#FFFFFF', fontFamily: 'Outfit_800ExtraBold', fontSize: 24, marginTop: 3 },
+  hero: { paddingTop: 50, paddingBottom: 36, borderBottomLeftRadius: 36, borderBottomRightRadius: 36, overflow: 'hidden', position: 'relative', elevation: 10, shadowColor: '#810100', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20 },
+  heroPattern: { ...StyleSheet.absoluteFillObject, opacity: 0.15, backgroundColor: '#000000' },
+  heroContent: { paddingHorizontal: 24, zIndex: 10 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  brandBadge: { color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Outfit_800ExtraBold', letterSpacing: 3, textTransform: 'uppercase' },
+  avatarBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.18, shadowRadius: 6, elevation: 4 },
+  avatarText: { color: '#810100', fontFamily: 'Outfit_900Black', fontSize: 14 },
+  heroBottom: { marginTop: 4 },
+  heroGreeting: { color: 'rgba(255,255,255,0.70)', fontSize: 18, fontFamily: 'Outfit_400Regular', letterSpacing: 0.5, marginBottom: 4 },
+  heroName: { color: '#FFFFFF', fontFamily: 'Outfit_800ExtraBold', fontSize: 32, textShadowColor: 'rgba(0,0,0,0.1)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 },
 
   // Content
   content: { padding: 16, gap: 20 },

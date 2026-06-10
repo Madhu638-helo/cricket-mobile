@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView,
-  Modal, FlatList, ActivityIndicator, Alert, Vibration } from 'react-native';
+  Modal, FlatList, ActivityIndicator, Alert, Vibration, RefreshControl } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRealtimeMatch } from '../../../lib/hooks/useRealtimeMatch';
 import { useAuth } from '../../../context/AuthContext';
@@ -11,6 +11,8 @@ import {
 import { supabase } from '../../../lib/supabase';
 import type { WicketType, ExtraType } from '../../../types/cricket';
 import LoadingScreen from '../../../components/LoadingScreen';
+import * as Haptics from 'expo-haptics';
+import { sendLocalNotification } from '../../../lib/notifications';
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 function initials(name: string) {
@@ -21,6 +23,12 @@ function initials(name: string) {
 
 function ScoreHeader({ innings, match, crr, rrr, teams }: any) {
   const battingTeam = teams?.find((t: any) => t.id === innings?.team_id);
+  const isChase = innings?.innings_number === 2 && innings?.target != null;
+  const runsNeeded = isChase ? innings.target - (innings?.total_runs ?? 0) : 0;
+  const totalMatchBalls = (match?.overs ?? 0) * 6;
+  const ballsRemaining = isChase ? totalMatchBalls - (innings?.total_balls ?? 0) : 0;
+  const chaseWon = isChase && runsNeeded <= 0;
+
   return (
     <View style={headerStyles.container}>
       <Text style={headerStyles.teamName}>{battingTeam?.name ?? '—'}</Text>
@@ -36,6 +44,17 @@ function ScoreHeader({ innings, match, crr, rrr, teams }: any) {
         {rrr !== null && <Text style={headerStyles.rate}>RRR {rrr.toFixed(2)}</Text>}
         {innings?.target && <Text style={headerStyles.target}>Target {innings.target}</Text>}
       </View>
+      {isChase && (
+        <View style={headerStyles.chaseBar}>
+          {chaseWon ? (
+            <Text style={headerStyles.chaseWon}>🎉 Target Chased!</Text>
+          ) : (
+            <Text style={headerStyles.chaseText}>
+              Need {runsNeeded} run{runsNeeded !== 1 ? 's' : ''} in {ballsRemaining} ball{ballsRemaining !== 1 ? 's' : ''}
+            </Text>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -267,10 +286,132 @@ function RunOutModal({ visible, strikerName, nonStrikerName, bowlingPlayers, onC
   );
 }
 
+// ─── Caught Modal ─────────────────────────────────────────────────────────────
+function CaughtModal({ visible, bowlingPlayers, onConfirm, onClose }: any) {
+  const [fielderId, setFielderId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (visible) setFielderId(null);
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent>
+      <View style={modalStyles.overlay}>
+        <View style={[modalStyles.sheet, { paddingBottom: 32 }]}>
+          <View style={modalStyles.handle} />
+          <Text style={modalStyles.title}>Who caught it?</Text>
+          <ScrollView style={{ maxHeight: 300, marginBottom: 20 }}>
+            {bowlingPlayers.map((p: any) => (
+              <TouchableOpacity
+                key={p.id}
+                onPress={() => setFielderId(p.id)}
+                style={{
+                  padding: 16, borderBottomWidth: 1, borderColor: '#EDEBDE',
+                  flexDirection: 'row', alignItems: 'center'
+                }}
+              >
+                <View style={{
+                  width: 24, height: 24, borderRadius: 12, borderWidth: 2, marginRight: 12,
+                  borderColor: fielderId === p.id ? '#810100' : '#D9D5CD',
+                  backgroundColor: fielderId === p.id ? '#810100' : 'transparent',
+                  alignItems: 'center', justifyContent: 'center'
+                }}>
+                  {fielderId === p.id && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FFF' }} />}
+                </View>
+                <Text style={{ fontFamily: 'Outfit_500Medium', fontSize: 16, color: '#1B1716' }}>{p.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <TouchableOpacity
+            style={[modalStyles.cancelBtn, { backgroundColor: fielderId ? '#810100' : '#ccc', marginTop: 0 }]}
+            onPress={() => fielderId && onConfirm(fielderId)}
+            disabled={!fielderId}
+          >
+            <Text style={[modalStyles.cancelText, { color: '#FFF', fontFamily: 'Outfit_700Bold' }]}>Confirm Catch</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose}>
+            <Text style={modalStyles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Dropped Catch Modal ────────────────────────────────────────────────────────
+function DroppedCatchModal({ visible, bowlingPlayers, onConfirm, onClose }: any) {
+  const [runsScored, setRunsScored] = React.useState(0);
+  const [fielderId, setFielderId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (visible) { setRunsScored(0); setFielderId(null); }
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent>
+      <View style={modalStyles.overlay}>
+        <View style={[modalStyles.sheet, { paddingBottom: 32 }]}>
+          <View style={modalStyles.handle} />
+          <Text style={[modalStyles.title, { color: '#ef4444' }]}>Dropped Catch 💔</Text>
+
+          <Text style={[modalStyles.title, { fontSize: 13, marginBottom: 8, color: '#666' }]}>Runs scored on this ball?</Text>
+          <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'center', marginBottom: 20 }}>
+            {[0, 1, 2, 3, 4, 6].map(r => (
+              <TouchableOpacity
+                key={r}
+                onPress={() => setRunsScored(r)}
+                style={{
+                  width: 44, height: 44, borderRadius: 22,
+                  backgroundColor: runsScored === r ? '#810100' : '#F5F3EF',
+                  alignItems: 'center', justifyContent: 'center',
+                  borderWidth: runsScored === r ? 0 : 1, borderColor: 'rgba(99,1,2,0.15)'
+                }}
+              >
+                <Text style={{ fontFamily: 'Outfit_700Bold', fontSize: 16, color: runsScored === r ? '#FFF' : '#1B1716' }}>{r}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={[modalStyles.title, { fontSize: 13, marginBottom: 8, color: '#666' }]}>Who dropped it?</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20, paddingHorizontal: 16 }}>
+            {bowlingPlayers.map((p: any) => (
+              <TouchableOpacity
+                key={p.id}
+                onPress={() => setFielderId(p.id)}
+                style={{
+                  paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, marginRight: 8,
+                  backgroundColor: fielderId === p.id ? '#810100' : '#F5F3EF',
+                  borderWidth: 1, borderColor: fielderId === p.id ? '#810100' : 'rgba(99,1,2,0.15)'
+                }}
+              >
+                <Text style={{ fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: fielderId === p.id ? '#FFF' : '#1B1716' }}>
+                  {p.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          <TouchableOpacity
+            style={[modalStyles.cancelBtn, { backgroundColor: fielderId ? '#810100' : '#ccc', marginTop: 0 }]}
+            onPress={() => fielderId && onConfirm({ runsScored, fielderId })}
+            disabled={!fielderId}
+          >
+            <Text style={[modalStyles.cancelText, { color: '#FFF', fontFamily: 'Outfit_700Bold' }]}>Confirm Drop</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose}>
+            <Text style={modalStyles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 // ─── Innings Break Modal ──────────────────────────────────────────────────────
-function InningsBreakModal({ visible, innings, match, teams, onStartInnings2, onClose, isScorer }: any) {
+function InningsBreakModal({ visible, innings, match, teams, onStartInnings2, onClose, isScorer, onRefresh }: any) {
   const battingTeam = teams?.find((t: any) => t.id === innings?.team_id);
   const target = (innings?.total_runs ?? 0) + 1;
+  const [refreshing, setRefreshing] = React.useState(false);
   return (
     <Modal visible={visible} animationType="fade" transparent>
       <View style={modalStyles.overlay}>
@@ -290,9 +431,25 @@ function InningsBreakModal({ visible, innings, match, teams, onStartInnings2, on
               <Text style={inningsBreakStyles.startBtnText}>Start Innings 2 →</Text>
             </TouchableOpacity>
           ) : (
-            <View style={[inningsBreakStyles.startBtn, { backgroundColor: 'rgba(129,1,0,0.1)' }]}>
-              <Text style={[inningsBreakStyles.startBtnText, { color: '#810100' }]}>⏳ Waiting for Innings 2…</Text>
-            </View>
+            <>
+              <View style={[inningsBreakStyles.startBtn, { backgroundColor: 'rgba(129,1,0,0.1)' }]}>
+                <Text style={[inningsBreakStyles.startBtnText, { color: '#810100' }]}>⏳ Waiting for Innings 2…</Text>
+              </View>
+              {/* Manual escape hatch — realtime events can be missed while the app
+                  is backgrounded, leaving viewers stuck on this modal. */}
+              <TouchableOpacity
+                style={[inningsBreakStyles.startBtn, { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: 'rgba(129,1,0,0.25)', marginTop: 12 }]}
+                disabled={refreshing}
+                onPress={async () => {
+                  setRefreshing(true);
+                  try { await onRefresh?.(); } finally { setRefreshing(false); }
+                }}
+              >
+                <Text style={[inningsBreakStyles.startBtnText, { color: '#810100' }]}>
+                  {refreshing ? 'Refreshing…' : '↻ Refresh'}
+                </Text>
+              </TouchableOpacity>
+            </>
           )}
         </View>
       </View>
@@ -315,6 +472,13 @@ export default function ScoringScreen() {
   const [pendingBalls, setPendingBalls] = useState<any[]>([]);
   const [submittedTotal, setSubmittedTotal] = useState<{ runs: number; balls: number; wickets: number } | null>(null);
   const [activeTab, setActiveTab] = useState<'score' | 'scorecard'>('score');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
   const submittingOverRef = React.useRef(false); // guard against double-submit
   // Monotonically-increasing delivery counter — updated synchronously in addBall,
   // never derived from inningsBalls.length (which is async/stale between rapid calls).
@@ -323,7 +487,9 @@ export default function ScoringScreen() {
 
   // Modal states
   const [showWicket, setShowWicket] = useState(false);
+  const [showCaughtWicket, setShowCaughtWicket] = useState(false);
   const [showRunOut, setShowRunOut] = useState(false);
+  const [showDroppedCatch, setShowDroppedCatch] = useState(false);
   const [showBatsman, setShowBatsman] = useState(false);
   const [showNonStriker, setShowNonStriker] = useState(false);
   const [showBowler, setShowBowler] = useState(false);
@@ -343,8 +509,24 @@ export default function ScoringScreen() {
   const myPlayer = players.find(p => p.user_id === user?.id);
   const currentInnings = useMemo(() => innings.find(i => i.status === 'active') ?? null, [innings]);
   const prevInnings = useMemo(() => innings.find(i => i.status === 'complete') ?? null, [innings]);
-  // Any player with is_scorer=true has the scoring pad (regardless of which team is batting).
-  const isScorer = !!(myPlayer?.is_scorer);
+  // ── ROLE DERIVATION ──
+  // The team that bats first is Team A in this context. The team chasing is Team B.
+  const battingFirstTeamId = match?.batting_first;
+  const chasingTeamId = match?.batting_first === match?.team1_id ? match?.team2_id : match?.team1_id;
+
+  const isTeamAScorer = !!(myPlayer?.is_scorer && myPlayer.team_id === battingFirstTeamId);
+  const isTeamBScorer = !!(myPlayer?.is_scorer && myPlayer.team_id === chasingTeamId);
+
+  // You can only score if you are the designated scorer for the CURRENTLY batting team
+  const canScoreNow = (match?.status === 'innings_1' && isTeamAScorer) || (match?.status === 'innings_2' && isTeamBScorer);
+  
+  // During innings break, the chasing team's scorer is the one who starts Innings 2
+  const canStartInnings2 = (match?.status === 'innings_break' && isTeamBScorer);
+
+  // We show the scoring screen if you have ANY administrative capability at this moment.
+  const showScoringScreen = canScoreNow || canStartInnings2;
+  // Fallback for UI components that check "isScorer" generically (like settings gear icon)
+  const isScorer = showScoringScreen;
 
 
   // Balls computation
@@ -469,17 +651,24 @@ export default function ScoringScreen() {
   //   (a) a fresh innings start (total_balls=0 → submittedTotal={balls:0})
   //   (b) a scorer rejoining mid-match (total_balls=12 → submittedTotal={balls:12})
   // After this, submitOver is the ONLY thing that updates submittedTotal.
-  // We NEVER use currentInnings.total_balls for scorer maths — self-broadcast inflates it.
+  // We NEVER use currentInnings.total_balls for scorer maths — self-broadcast inflates it on every ball.
   useEffect(() => {
-    if (!isScorer || !currentInnings) return;
+    if (!showScoringScreen || !currentInnings) return;
     // Only initialize once per innings (when submittedTotal is still null)
     if (submittedTotal !== null) return;
+    // Innings totals only update at over boundaries, but every ball is persisted
+    // immediately. After an app reload mid-over the balls table is ahead of the
+    // innings row — derive from balls too so scoring resumes mid-over, not from
+    // the start of the over.
+    const ballsLegal = dbBalls.filter((b: any) => b.extra_type !== 'wide' && b.extra_type !== 'noball').length;
+    const ballsRuns = dbBalls.reduce((s: number, b: any) => s + (b.runs_off_bat ?? 0) + (b.extras ?? 0), 0);
+    const ballsWickets = dbBalls.filter((b: any) => b.is_wicket).length;
     setSubmittedTotal({
-      runs:    currentInnings.total_runs,
-      balls:   currentInnings.total_balls,
-      wickets: currentInnings.total_wickets,
+      runs:    Math.max(currentInnings.total_runs, ballsRuns),
+      balls:   Math.max(currentInnings.total_balls, ballsLegal),
+      wickets: Math.max(currentInnings.total_wickets, ballsWickets),
     });
-  }, [isScorer, currentInnings?.id]);
+  }, [showScoringScreen, currentInnings?.id, dbBalls]);
 
   // Sync on-field state from last ball in the DB (confirmed balls only, sorted by delivery_number)
   useEffect(() => {
@@ -520,13 +709,21 @@ export default function ScoringScreen() {
     if (match?.status === 'result') router.replace(`/match/${code}/result` as any);
   }, [match?.status]);
 
-  // Show setup modals when no players selected
+  // Show setup modals when no players selected.
+  // Skipped while any other modal/replacement flow is active — opening a second
+  // native Modal on top of an open one freezes touch handling on iOS (the
+  // run-out flow clears strikerId/nonStrikerId, which used to trigger this
+  // effect while the New Batsman modal was already opening → frozen screen).
   useEffect(() => {
-    if (!isScorer || !currentInnings) return;
+    if (!showScoringScreen || !currentInnings) return;
+    if (showWicket || showRunOut || showBatsman || showNonStriker || showBowler ||
+        showBowlerOptions || bowlerNeededAfterWicket || newBatsmanIsNonStriker) return;
     if (!strikerId && battingPlayers.length > 0) setShowBatsman(true);
     else if (!nonStrikerId && battingPlayers.length > 0) setShowNonStriker(true);
     else if (!bowlerId && bowlingPlayers.length > 0) setShowBowler(true);
-  }, [isScorer, currentInnings?.id, strikerId, nonStrikerId, bowlerId]);
+  }, [showScoringScreen, currentInnings?.id, strikerId, nonStrikerId, bowlerId,
+      showWicket, showRunOut, showBatsman, showNonStriker, showBowler,
+      showBowlerOptions, bowlerNeededAfterWicket, newBatsmanIsNonStriker]);
 
   const addBall = useCallback(({ runsOffBat = 0, extraType = null as ExtraType | null, extraRuns = 0, isWicket = false, wicketType = null as WicketType | null, batsmanIdOverride = null as string | null, fielderIdOverride = null as string | null } = {}) => {
     if (!currentInnings || !strikerId || !bowlerId) {
@@ -534,14 +731,41 @@ export default function ScoringScreen() {
       return;
     }
 
+    const maxBalls = (match?.overs ?? 0) * 6;
+    const stableBaseBalls = submittedTotal?.balls ?? 0;
+    const baseWicketsChk = submittedTotal?.wickets ?? 0;
+    const allOutLimit = battingPlayers.length || 10;
+    
+    // Prevent logging balls past the maximum overs
+    if (maxBalls > 0 && (stableBaseBalls + pendingLegal) >= maxBalls) {
+      Alert.alert('Innings Over', `Maximum overs (${match?.overs}) reached.`);
+      return;
+    }
+
+    // Prevent logging balls if all batsmen are out
+    if ((baseWicketsChk + pendingWickets) >= allOutLimit) {
+      Alert.alert('Innings Over', 'All batsmen are out.');
+      return;
+    }
+
+    // Prevent logging balls after the target is already chased.
+    // Use the same Math.max as the displayed score — submittedTotal can lag
+    // behind broadcast-updated innings totals after a reload mid-innings.
+    const displayedRuns = Math.max((submittedTotal?.runs ?? 0) + pendingRuns, currentInnings.total_runs);
+    if (currentInnings.innings_number === 2 && currentInnings.target != null && displayedRuns >= currentInnings.target) {
+      Alert.alert('Innings Over', 'Target already chased — match is over.');
+      if (pendingBalls.length > 0) submitOver(pendingBalls);
+      return;
+    }
+
     const isExtra = extraType === 'wide' || extraType === 'noball';
     const dn = deliveryCounterRef.current;
     deliveryCounterRef.current += 1;
-    // submittedTotal is initialized from DB at innings load (never null for scorer).
     // NEVER use currentInnings.total_balls here — self-broadcast inflates it every ball.
-    const stableBaseBalls = submittedTotal?.balls ?? 0;
     const stableOverNum = Math.floor((stableBaseBalls + pendingLegal) / 6);
-    const ballNumber = pendingBalls.filter((b: any) =>
+    // Count from inningsBalls (DB + pending), not pendingBalls alone — after a
+    // reload mid-over, pendingBalls is empty but the over's balls exist in the DB.
+    const ballNumber = inningsBalls.filter((b: any) =>
       b.over_number === stableOverNum && b.extra_type !== 'wide' && b.extra_type !== 'noball'
     ).length;
 
@@ -580,6 +804,15 @@ export default function ScoringScreen() {
     // Total runs for this delivery
     const deliveryRuns = runsOffBat + (extraType ? (extraRuns || (isExtra ? 1 : 0)) : 0);
 
+    if (isWicket) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      sendLocalNotification('Wicket! 🏏', `A wicket has fallen. (${currentInnings.total_runs}/${currentInnings.wickets + 1})`);
+    } else if (runsOffBat >= 4) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } else {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+
     Vibration.vibrate(30);
     setNoBallMode(false);
     setPendingBalls(prev => [...prev, ball]);
@@ -608,7 +841,10 @@ export default function ScoringScreen() {
     });
 
     const legalAfter = pendingLegal + (isExtra ? 0 : 1);
-    const completedOver = !isExtra && legalAfter > 0 && legalAfter % 6 === 0;
+    // Over completes when the innings-wide legal ball count hits a multiple of 6.
+    // Must include stableBaseBalls — after a mid-over reload, pendingLegal alone
+    // restarts at 0 and the over would run long.
+    const completedOver = !isExtra && (stableBaseBalls + legalAfter) % 6 === 0;
 
     // Mid-over all-out check: if this was a wicket and there are no more batsmen,
     // force-end the innings immediately without waiting for the over to complete.
@@ -625,12 +861,24 @@ export default function ScoringScreen() {
       }
     }
 
+    // Mid-over TARGET CHASE check (innings 2 only):
+    // If total runs >= target, end the innings immediately — the match is won.
+    // Math.max against currentInnings.total_runs so the check agrees with the
+    // displayed score even when submittedTotal lags after a reload.
+    if (!completedOver && currentInnings?.innings_number === 2 && currentInnings.target != null) {
+      const totalRunsAfter = Math.max((submittedTotal?.runs ?? 0) + pendingRuns, currentInnings.total_runs) + deliveryRuns;
+      if (totalRunsAfter >= currentInnings.target) {
+        submitOver([...pendingBalls, ball], legalAfter);
+        return;
+      }
+    }
+
     if (completedOver) {
       // Pass legalAfter explicitly — pendingLegal is a stale closure value
       // that doesn't include this new ball yet (React batches state updates).
       submitOver([...pendingBalls, ball], legalAfter);
     }
-  }, [currentInnings, strikerId, nonStrikerId, bowlerId, currentOverNum, currentOverBalls, isFreehitNext, pendingBalls, pendingRuns, pendingWickets, pendingLegal, submittedTotal]);
+  }, [currentInnings, strikerId, nonStrikerId, bowlerId, currentOverNum, currentOverBalls, inningsBalls, isFreehitNext, pendingBalls, pendingRuns, pendingWickets, pendingLegal, submittedTotal]);
 
 
   const submitOver = useCallback(async (overBalls: any[], legalCountOverride?: number) => {
@@ -653,9 +901,13 @@ export default function ScoringScreen() {
     const baseBalls    = submittedTotal?.balls     ?? 0;
     const baseWickets  = submittedTotal?.wickets   ?? 0;
 
-    const totalRunsOpt     = baseRuns     + runsInOver;
-    const totalBallsOpt    = baseBalls    + legalInOver;
-    const totalWicketsOpt  = baseWickets  + wicketsInOver;
+    // Math.max against currentInnings totals: the broadcast handler keeps them
+    // current per-ball, so they catch a stale submittedTotal base (reload
+    // mid-innings). Without this, a chase could be "won" on screen while the
+    // submitted total stays below target and innings_end never fires.
+    const totalRunsOpt     = Math.max(baseRuns    + runsInOver,    currentInnings?.total_runs    ?? 0);
+    const totalBallsOpt    = Math.max(baseBalls   + legalInOver,   currentInnings?.total_balls   ?? 0);
+    const totalWicketsOpt  = Math.max(baseWickets + wicketsInOver, currentInnings?.total_wickets ?? 0);
 
     setSubmittedTotal({ runs: totalRunsOpt, balls: totalBallsOpt, wickets: totalWicketsOpt });
     setPendingBalls([]);
@@ -668,7 +920,10 @@ export default function ScoringScreen() {
 
     try {
       if (inningsOver) {
-        setShowInningsBreak(true);
+        // Only show innings break modal for innings 1 — innings 2 goes straight to result
+        if (currentInnings?.innings_number === 1) {
+          setShowInningsBreak(true);
+        }
         // Balls already inserted per-ball in addBall — only update innings totals
         if (currentInnings) {
           await (supabase.from('innings') as any).update({
@@ -731,6 +986,7 @@ export default function ScoringScreen() {
             target }
         })
       });
+      sendLocalNotification('Innings Break Over', `2nd Innings is starting. Target: ${target} runs`);
       setStrikerId(''); setNonStrikerId(''); setBowlerId('');
       setSubmittedTotal(null); setPendingBalls([]);
       setDismissedIds(new Set());
@@ -747,6 +1003,16 @@ export default function ScoringScreen() {
   useEffect(() => {
     if (match?.status === 'innings_break') {
       setShowInningsBreak(true);
+    }
+    // Auto-dismiss for ALL clients when innings 2 starts (covers viewers + new scorer).
+    // The old scorer already dismissed it in handleStartInnings2; this catches everyone else.
+    if (match?.status === 'innings_2' && showInningsBreak) {
+      setShowInningsBreak(false);
+      // Reset on-field state so the new scorer gets clean selection modals
+      setStrikerId(''); setNonStrikerId(''); setBowlerId('');
+      setSubmittedTotal(null); setPendingBalls([]);
+      setDismissedIds(new Set());
+      deliveryCounterRef.current = 0;
     }
   }, [match?.status]);
 
@@ -790,7 +1056,11 @@ export default function ScoringScreen() {
           ))}
         </View>
 
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          style={styles.scroll} 
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#810100" colors={['#810100']} />}
+        >
           {activeTab === 'score' && (
             <>
               <ScoreHeader innings={liveInnings} match={match} crr={crr} rrr={rrr} teams={teams} />
@@ -831,25 +1101,37 @@ export default function ScoringScreen() {
           )}
 
           {activeTab === 'scorecard' && (() => {
+            // One scorecard block per innings — both teams, not just the live one
+            const sortedInnings = [...innings].sort((a: any, b: any) => (a.innings_number ?? 0) - (b.innings_number ?? 0));
+            return sortedInnings.map((inn: any) => {
+            const isActiveInn = inn.id === currentInnings?.id;
+            const cardBalls = isActiveInn ? inningsBalls : balls.filter(b => b.innings_id === inn.id);
+            const cardBattingTeam = teams?.find((t: any) => t.id === inn.team_id);
+            const cardBowlTeamId = inn.team_id === match?.team1_id ? match?.team2_id : match?.team1_id;
+            const cardBowlingTeam = teams?.find((t: any) => t.id === cardBowlTeamId);
+            const cardBattingPlayers = [...players.filter(p => p.team_id === inn.team_id && !p.is_joker), ...jokerPlayers];
+            const cardBowlingPlayers = [...players.filter(p => p.team_id === cardBowlTeamId && !p.is_joker), ...jokerPlayers];
+            const cardTotals = isActiveInn && liveInnings ? liveInnings : inn;
+
             // Build dismissal lookup: which ball dismissed each batsman
             const dismissalMap = new Map<string, any>();
-            inningsBalls.forEach(b => {
+            cardBalls.forEach(b => {
               if (b.is_wicket && b.batsman_id) dismissalMap.set(b.batsman_id, b);
             });
 
             // Extras total
-            const extrasTotal = inningsBalls.reduce((s, b) => s + (b.extras ?? 0), 0);
-            const wides = inningsBalls.filter(b => b.extra_type === 'wide').length;
-            const noBalls = inningsBalls.filter(b => b.extra_type === 'noball').length;
-            const byes = inningsBalls.filter(b => b.extra_type === 'bye').reduce((s, b) => s + (b.extras ?? 0), 0);
-            const legByes = inningsBalls.filter(b => b.extra_type === 'legbye').reduce((s, b) => s + (b.extras ?? 0), 0);
+            const extrasTotal = cardBalls.reduce((s, b) => s + (b.extras ?? 0), 0);
+            const wides = cardBalls.filter(b => b.extra_type === 'wide').length;
+            const noBalls = cardBalls.filter(b => b.extra_type === 'noball').length;
+            const byes = cardBalls.filter(b => b.extra_type === 'bye').reduce((s, b) => s + (b.extras ?? 0), 0);
+            const legByes = cardBalls.filter(b => b.extra_type === 'legbye').reduce((s, b) => s + (b.extras ?? 0), 0);
 
             return (
-              <View style={styles.scorecardContainer}>
+              <View key={inn.id} style={styles.scorecardContainer}>
                 {/* ── BATTING ── */}
                 <View style={styles.scorecardSection}>
                   <View style={styles.scorecardHeaderRow}>
-                    <Text style={[styles.scorecardHeaderName]}>BATTING</Text>
+                    <Text style={[styles.scorecardHeaderName]}>{(cardBattingTeam?.name ?? 'BATTING').toUpperCase()} — BATTING</Text>
                     <Text style={styles.scorecardHeaderStat}>R</Text>
                     <Text style={styles.scorecardHeaderStat}>B</Text>
                     <Text style={styles.scorecardHeaderStat}>4s</Text>
@@ -857,11 +1139,11 @@ export default function ScoringScreen() {
                     <Text style={styles.scorecardHeaderStat}>SR</Text>
                   </View>
 
-                  {battingPlayers.map(p => {
-                    const isOnStrike = p.id === strikerId;
-                    const isNonStriker = p.id === nonStrikerId;
+                  {cardBattingPlayers.map(p => {
+                    const isOnStrike = isActiveInn && p.id === strikerId;
+                    const isNonStriker = isActiveInn && p.id === nonStrikerId;
                     const dismissalBall = dismissalMap.get(p.id);
-                    const st = calcBatsmanStats(p, inningsBalls, isOnStrike, dismissalBall);
+                    const st = calcBatsmanStats(p, cardBalls, isOnStrike, dismissalBall);
                     const hasBatted = st.balls > 0 || st.isOut;
                     const isActive = isOnStrike || isNonStriker;
                     const yetToBat = !hasBatted && !isActive;
@@ -911,10 +1193,10 @@ export default function ScoringScreen() {
                   <View style={styles.scorecardTotalRow}>
                     <Text style={styles.scorecardTotalLabel}>Total</Text>
                     <Text style={styles.scorecardTotalValue}>
-                      {liveInnings?.total_runs ?? 0}/{liveInnings?.total_wickets ?? 0}
+                      {cardTotals?.total_runs ?? 0}/{cardTotals?.total_wickets ?? 0}
                       {'  '}
                       <Text style={styles.scorecardTotalOvers}>
-                        ({formatOvers(liveInnings?.total_balls ?? 0)} ov)
+                        ({formatOvers(cardTotals?.total_balls ?? 0)} ov)
                       </Text>
                     </Text>
                   </View>
@@ -923,7 +1205,7 @@ export default function ScoringScreen() {
                 {/* ── BOWLING ── */}
                 <View style={[styles.scorecardSection, { marginTop: 12 }]}>
                   <View style={styles.scorecardHeaderRow}>
-                    <Text style={styles.scorecardHeaderName}>BOWLING</Text>
+                    <Text style={styles.scorecardHeaderName}>{(cardBowlingTeam?.name ?? 'BOWLING').toUpperCase()} — BOWLING</Text>
                     <Text style={styles.scorecardHeaderStat}>O</Text>
                     <Text style={styles.scorecardHeaderStat}>M</Text>
                     <Text style={styles.scorecardHeaderStat}>R</Text>
@@ -931,9 +1213,9 @@ export default function ScoringScreen() {
                     <Text style={styles.scorecardHeaderStat}>ECO</Text>
                   </View>
 
-                  {bowlingPlayers.map(p => {
-                    const bs = calcBowlerStats(p, inningsBalls);
-                    const isCurrentBowler = p.id === bowlerId;
+                  {cardBowlingPlayers.map(p => {
+                    const bs = calcBowlerStats(p, cardBalls);
+                    const isCurrentBowler = isActiveInn && p.id === bowlerId;
                     // Show all bowlers who have bowled at least 1 ball, plus current bowler
                     if (bs.overs === 0 && !isCurrentBowler) return null;
                     const legalBalls = Math.floor(bs.overs) * 6 + Math.round((bs.overs % 1) * 10);
@@ -955,13 +1237,14 @@ export default function ScoringScreen() {
                 </View>
               </View>
             );
+            });
           })()}
 
           <View style={{ height: 200 }} />
         </ScrollView>
 
         {/* Scoring Pad (scorer only, only during an active innings) */}
-        {isScorer && activeTab === 'score' && currentInnings && match?.status !== 'innings_break' && (
+        {canScoreNow && activeTab === 'score' && currentInnings && match?.status !== 'innings_break' && match?.status !== 'result' && (
           <View style={styles.pad}>
 
             {/* NB mode banner */}
@@ -1012,10 +1295,13 @@ export default function ScoringScreen() {
                 <Text style={[styles.actionBtnText, noBallMode && { color: '#e67e00', fontFamily: 'Outfit_900Black' }]}>NB</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.actionBtn} onPress={() => addBall({ extraType: 'bye', extraRuns: 1 })}>
-                <Text style={styles.actionBtnText}>Bye</Text>
+                <Text style={styles.actionBtnText}>B</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.actionBtn} onPress={() => addBall({ extraType: 'legbye', extraRuns: 1 })}>
-                <Text style={styles.actionBtnText}>Leg</Text>
+                <Text style={styles.actionBtnText}>LB</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionBtn} onPress={() => setShowDroppedCatch(true)}>
+                <Text style={[styles.actionBtnText, { color: '#ef4444' }]}>Drop</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.wicketBtn} onPress={() => setShowWicket(true)}>
                 <Text style={styles.wicketBtnText}>WICKET</Text>
@@ -1043,10 +1329,12 @@ export default function ScoringScreen() {
           if (type === 'runout') {
             // Run-out needs extra info: runs completed + who is out
             setShowRunOut(true);
+          } else if (type === 'caught') {
+            // Caught needs fielder selection
+            setShowCaughtWicket(true);
           } else {
             // All other wickets: dismissed batsman is always the striker
-            const legalAfter = pendingLegal + 1;
-            const overEnds = legalAfter > 0 && legalAfter % 6 === 0;
+            const overEnds = ((submittedTotal?.balls ?? 0) + pendingLegal + 1) % 6 === 0;
             addBall({ isWicket: true, wicketType: type });
             if (availableBatsmen.length > 0) {
               // If over ends after this wicket, show batsman modal first
@@ -1094,8 +1382,7 @@ export default function ScoringScreen() {
           //   not crossed & strikerIsOut → NS still at NS end → survivor NOT on strike
           //   not crossed & NSIsOut   → striker still at striker end → survivor ON STRIKE ✓
 
-          const legalAfter = pendingLegal + 1;
-          const overEnds = legalAfter > 0 && legalAfter % 6 === 0;
+          const overEnds = ((submittedTotal?.balls ?? 0) + pendingLegal + 1) % 6 === 0;
 
           // Record the ball — runs go to the team, dismissal to the correct batsman
           addBall({
@@ -1141,6 +1428,34 @@ export default function ScoringScreen() {
           }
         }}
         onClose={() => { setShowRunOut(false); }}
+      />
+
+      <CaughtModal
+        visible={showCaughtWicket}
+        bowlingPlayers={bowlingPlayers}
+        onConfirm={(fielderId: string) => {
+          setShowCaughtWicket(false);
+          const overEnds = ((submittedTotal?.balls ?? 0) + pendingLegal + 1) % 6 === 0;
+          addBall({ isWicket: true, wicketType: 'caught', fielderIdOverride: fielderId });
+          if (availableBatsmen.length > 0) {
+            setBowlerNeededAfterWicket(overEnds);
+            setNewBatsmanIsNonStriker(overEnds);
+            setShowBatsman(true);
+          } else if (overEnds) {
+            setShowBowler(true);
+          }
+        }}
+        onClose={() => setShowCaughtWicket(false)}
+      />
+
+      <DroppedCatchModal
+        visible={showDroppedCatch}
+        bowlingPlayers={bowlingPlayers}
+        onConfirm={({ runsScored, fielderId }: any) => {
+          setShowDroppedCatch(false);
+          addBall({ runsOffBat: runsScored, isWicket: false, wicketType: 'dropped', fielderIdOverride: fielderId });
+        }}
+        onClose={() => setShowDroppedCatch(false)}
       />
 
       <PlayerSelectModal
@@ -1308,7 +1623,7 @@ export default function ScoringScreen() {
             </TouchableOpacity>
 
             {/* Transfer Scorer — only for active scorers */}
-            {isScorer && (
+            {canScoreNow && (
               <TouchableOpacity
                 style={[modalStyles.cancelBtn, { backgroundColor: 'rgba(10,132,255,0.08)', borderColor: '#0a84ff33', borderWidth: 1, marginBottom: 12 }]}
                 onPress={() => { setShowSettings(false); setShowTransferScorer(true); }}
@@ -1357,9 +1672,10 @@ export default function ScoringScreen() {
         innings={prevInnings ?? liveInnings}
         match={match}
         teams={teams}
-        isScorer={isScorer}
+        isScorer={canStartInnings2}
         onStartInnings2={handleStartInnings2}
         onClose={() => setShowInningsBreak(false)}
+        onRefresh={refetch}
       />
     </View>
   );
@@ -1440,7 +1756,10 @@ const headerStyles = StyleSheet.create({
   overs: { color: 'rgba(255,255,255,0.85)', fontFamily: 'Outfit_600SemiBold', fontSize: 15, marginTop: 4 },
   ratesRow: { flexDirection: 'row', gap: 20, marginTop: 6 },
   rate: { color: 'rgba(255,255,255,0.75)', fontSize: 13, fontFamily: 'Outfit_600SemiBold' },
-  target: { color: '#FFD60A', fontSize: 13, fontFamily: 'Outfit_800ExtraBold' } });
+  target: { color: '#FFD60A', fontSize: 13, fontFamily: 'Outfit_800ExtraBold' },
+  chaseBar: { marginTop: 10, backgroundColor: 'rgba(255,214,10,0.15)', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,214,10,0.3)' },
+  chaseText: { color: '#FFD60A', fontSize: 14, fontFamily: 'Outfit_800ExtraBold', textAlign: 'center' },
+  chaseWon: { color: '#4ADE80', fontSize: 16, fontFamily: 'Outfit_900Black', textAlign: 'center' } });
 
 const dotStyles = StyleSheet.create({
   row: { paddingHorizontal: 12, marginBottom: 10 },

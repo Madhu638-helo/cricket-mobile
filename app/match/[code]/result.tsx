@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  ScrollView, StatusBar, Share, Clipboard,
+  ScrollView, StatusBar, Share, Clipboard, RefreshControl,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRealtimeMatch } from '../../../lib/hooks/useRealtimeMatch';
@@ -9,6 +9,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import LoadingScreen from '../../../components/LoadingScreen';
+import { BarChart } from 'react-native-gifted-charts';
 
 function formatOvers(balls: number) {
   return `${Math.floor(balls / 6)}.${balls % 6}`;
@@ -28,12 +29,20 @@ interface PlayerStat {
 export default function MatchResultScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
-  const { session, match, innings, teams, loading } = useRealtimeMatch(code);
+  const { session, match, innings, teams, loading, refetch } = useRealtimeMatch(code);
   const { user } = useAuth();
   const [batStats, setBatStats] = useState<Record<string, PlayerStat>>({});
   const [bowlStats, setBowlStats] = useState<Record<string, PlayerStat>>({});
+  const [manhattanData, setManhattanData] = useState<any[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
   const [shareLoading, setShareLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   useEffect(() => {
     if (match && innings.length > 0) loadStats();
@@ -44,7 +53,7 @@ export default function MatchResultScreen() {
     const inningsIds = innings.map(i => i.id);
     if (inningsIds.length === 0) return;
     const { data: balls } = await (supabase.from('balls') as any)
-      .select('batsman_id, bowler_id, runs_off_bat, extras, is_wicket, wicket_type, extra_type, innings_id')
+      .select('batsman_id, bowler_id, runs_off_bat, extras, is_wicket, wicket_type, extra_type, innings_id, over_number')
       .in('innings_id', inningsIds);
     const { data: ps } = await (supabase.from('players') as any)
       .select('id, name, user_id').in('session_id', [match?.session_id].filter(Boolean));
@@ -52,6 +61,11 @@ export default function MatchResultScreen() {
     setPlayers(ps ?? []);
     const batMap: Record<string, PlayerStat> = {};
     const bowlMap: Record<string, PlayerStat> = {};
+    const manhattanArr: { value: number, label: string, frontColor: string, topLabelComponent?: any }[] = [];
+    const innings1Id = innings[0]?.id;
+    const innings2Id = innings[1]?.id;
+    const overMap1 = new Map<number, number>();
+    const overMap2 = new Map<number, number>();
 
     for (const b of balls ?? []) {
       const pName = (ps ?? []).find((p: any) => p.id === b.batsman_id)?.name ?? 'Unknown';
@@ -70,12 +84,38 @@ export default function MatchResultScreen() {
         if (b.extra_type !== 'wide' && b.extra_type !== 'noball') bowlMap[b.bowler_id].balls++;
         if (b.is_wicket && b.wicket_type !== 'runout' && b.wicket_type !== 'retiredhurt') bowlMap[b.bowler_id].wickets++;
       }
+
+      const r = (b.runs_off_bat ?? 0) + (b.extras ?? 0);
+      if (b.innings_id === innings1Id) overMap1.set(b.over_number, (overMap1.get(b.over_number) || 0) + r);
+      else if (b.innings_id === innings2Id) overMap2.set(b.over_number, (overMap2.get(b.over_number) || 0) + r);
     }
     for (const v of Object.values(bowlMap)) {
       v.eco = v.balls > 0 ? Math.round((v.runsBowled / (v.balls / 6)) * 100) / 100 : 0;
     }
+
+    const maxOvers = Math.max(-1, ...Array.from(overMap1.keys()), ...Array.from(overMap2.keys()));
+    for (let i = 0; i <= maxOvers; i++) {
+      if (overMap1.has(i)) {
+        manhattanArr.push({
+          value: overMap1.get(i) || 0,
+          label: (i + 1).toString(),
+          frontColor: '#810100',
+          spacing: overMap2.has(i) ? 2 : 16
+        } as any);
+      }
+      if (overMap2.has(i)) {
+        manhattanArr.push({
+          value: overMap2.get(i) || 0,
+          label: overMap1.has(i) ? '' : (i + 1).toString(),
+          frontColor: '#1a8a3e',
+          spacing: 16
+        } as any);
+      }
+    }
+
     setBatStats(batMap);
     setBowlStats(bowlMap);
+    setManhattanData(manhattanArr);
   };
 
   // Player of the Match — highest impact score (weighted runs + wickets*30)
@@ -94,7 +134,7 @@ export default function MatchResultScreen() {
     setShareLoading(true);
     try {
       const url = `https://yourapp.com/watch/${code}`;
-      await Share.share({ message: `🏏 Watch the match: ${match?.result || 'TURF Live Match'}\n${url}`, url });
+      await Share.share({ message: `🏏 Watch the match: ${match?.result || 'CricPro Live Match'}\n${url}`, url });
     } finally { setShareLoading(false); }
   };
 
@@ -127,7 +167,11 @@ export default function MatchResultScreen() {
     <View style={C.screen}>
       <StatusBar barStyle="dark-content" backgroundColor="#EDEBDE" />
       <SafeAreaView style={C.safe}>
-        <ScrollView contentContainerStyle={C.content} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          contentContainerStyle={C.content} 
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#810100" colors={['#810100']} />}
+        >
 
           {/* Trophy header */}
           <View style={C.trophySection}>
@@ -171,6 +215,28 @@ export default function MatchResultScreen() {
                 <Text style={C.pomAvatarText}>
                   {pom.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
                 </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Manhattan Chart */}
+          {manhattanData.length > 0 && (
+            <View style={C.tableCard}>
+              <Text style={C.tableTitle}>📊 RUNS PER OVER</Text>
+              <View style={{ marginTop: 16 }}>
+                <BarChart
+                  data={manhattanData}
+                  barWidth={22}
+                  spacing={16}
+                  roundedTop
+                  xAxisThickness={0}
+                  yAxisThickness={0}
+                  yAxisTextStyle={{ color: 'gray' }}
+                  noOfSections={4}
+                  maxValue={Math.max(...manhattanData.map((d: any) => d.value), 10)}
+                  hideRules
+                  initialSpacing={10}
+                />
               </View>
             </View>
           )}

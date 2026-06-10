@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView,
-  ActivityIndicator, Alert, Share, Modal, TextInput, TouchableWithoutFeedback,
+  ActivityIndicator, Alert, Share, Modal, TextInput, TouchableWithoutFeedback, RefreshControl,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../../lib/supabase';
@@ -25,6 +25,13 @@ export default function LobbyScreen() {
   const [overInput, setOverInput] = useState('');
   const [editingOvers, setEditingOvers] = useState(false);
   const [savingOvers, setSavingOvers] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   // Player action sheet
   const [selectedPlayer, setSelectedPlayer] = useState<any | null>(null);
@@ -73,7 +80,7 @@ export default function LobbyScreen() {
     setStarting(true);
     try {
       await (supabase.from('matches') as any).update({ status: 'toss' }).eq('id', match.id);
-      router.push(`/match/${code}/toss`);
+      router.replace(`/match/${code}/toss`);
     } catch {
       Alert.alert('Error', 'Failed to start match');
     } finally {
@@ -99,7 +106,12 @@ export default function LobbyScreen() {
   };
 
   const handleShare = async () => {
-    await Share.share({ message: `Join my cricket match on TURF! Code: ${code}` });
+    try {
+      const url = `cricpro://match/${code}`;
+      await Share.share({ message: `Join my cricket match on CricPro! Code: ${code}` });
+    } catch (e: any) {
+      console.log(e.message);
+    }
   };
 
   const openPlayerMenu = (player: any) => {
@@ -187,7 +199,11 @@ export default function LobbyScreen() {
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={S.content} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          contentContainerStyle={S.content} 
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#810100" colors={['#810100']} />}
+        >
 
           {/* ── Match Format Card ── */}
           <View style={S.card}>

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "cricket-mobile",
+    "name": "CricPro",
     "slug": "cricket-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -14,21 +14,27 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#810100",
+        "backgroundColor": "#EDEBDE",
         "foregroundImage": "./assets/icon.png"
       }
     },
     "splash": {
       "image": "./assets/icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#810100"
+      "backgroundColor": "#EDEBDE"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow CricPro to use Face ID to securely unlock the app."
+        }
+      ]
     ],
     "extra": {
       "eas": {

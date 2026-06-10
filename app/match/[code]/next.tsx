@@ -5,9 +5,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRealtimeMatch } from '../../../lib/hooks/useRealtimeMatch';
 import { useAuth } from '../../../context/AuthContext';
-
-// Using local dev API server since this handles complex Next.js backend logic
-const API_BASE = 'http://localhost:3000/api';
+import { supabase } from '../../../lib/supabase';
 
 export default function NextMatchScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
@@ -16,6 +14,7 @@ export default function NextMatchScreen() {
   const { session, teams, loading } = useRealtimeMatch(code);
 
   const [overs, setOvers] = useState('10');
+  const [rearrange, setRearrange] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const handleStart = async () => {
@@ -34,24 +33,27 @@ export default function NextMatchScreen() {
     try {
       if (teams.length < 2) throw new Error('Not enough teams in this session.');
 
-      const res = await fetch(`${API_BASE}/match/${code}/action`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'start_next_match',
-          data: {
-            overs: oversNum,
-            team1Id: teams[0].id,
-            team2Id: teams[1].id
-          }
-        })
-      });
+      // Get highest match number
+      const { data: latestMatch, error: latestErr } = await (supabase.from('matches') as any)
+        .select('match_number').eq('session_id', session.id)
+        .order('match_number', { ascending: false }).limit(1).single();
+      
+      const nextMatchNumber = (latestMatch?.match_number || 1) + 1;
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to start next match');
+      // Create new match directly via Supabase
+      const { data: newMatch, error: insertErr } = await (supabase.from('matches') as any).insert({
+        session_id: session.id,
+        match_number: nextMatchNumber,
+        overs: oversNum,
+        team1_id: teams[0].id,
+        team2_id: teams[1].id,
+        status: rearrange ? 'setup' : 'toss',
+      }).select().single();
 
-      // Go back to Toss screen for the new match!
-      router.replace(`/match/${code}/toss`);
+      if (insertErr || !newMatch) throw new Error(insertErr?.message || 'Failed to start next match');
+
+      // Go to Lobby for rearrangements, or Toss if keeping same teams
+      router.replace(rearrange ? `/match/${code}/lobby` : `/match/${code}/toss`);
     } catch (e: any) {
       Alert.alert('Error', e.message);
     } finally {
@@ -111,8 +113,24 @@ export default function NextMatchScreen() {
             ))}
           </View>
 
+          <Text style={styles.sectionLabel}>TEAM SETUP</Text>
+          <View style={styles.rearrangeRow}>
+            <TouchableOpacity 
+              style={[styles.rearrangeBtn, !rearrange && styles.rearrangeBtnActive]} 
+              onPress={() => setRearrange(false)}
+            >
+              <Text style={[styles.rearrangeBtnText, !rearrange && styles.rearrangeBtnTextActive]}>Same Teams</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.rearrangeBtn, rearrange && styles.rearrangeBtnActive]} 
+              onPress={() => setRearrange(true)}
+            >
+              <Text style={[styles.rearrangeBtnText, rearrange && styles.rearrangeBtnTextActive]}>Rearrange Teams</Text>
+            </TouchableOpacity>
+          </View>
+
           <TouchableOpacity style={styles.createBtn} onPress={handleStart} disabled={submitting}>
-            {submitting ? <ActivityIndicator color="#810100" /> : <Text style={styles.createBtnText}>Create & Proceed to Toss →</Text>}
+            {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.createBtnText}>{rearrange ? 'Create & Proceed to Lobby →' : 'Create & Proceed to Toss →'}</Text>}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -140,5 +158,10 @@ const styles = StyleSheet.create({
   teamsBox: { backgroundColor: '#FFFFFF', padding: 16, borderRadius: 12, shadowColor: '#630102', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 2, borderWidth: 0, marginBottom: 24 },
   teamsTitle: { color: '#666666', fontFamily: 'Outfit_400Regular', fontSize: 12, textTransform: 'uppercase', marginBottom: 8 },
   teamName: { color: '#111111', fontFamily: 'Outfit_400Regular', fontSize: 16, marginBottom: 4 },
+  rearrangeRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  rearrangeBtn: { flex: 1, paddingVertical: 14, backgroundColor: '#FFFFFF', borderRadius: 12, alignItems: 'center', shadowColor: '#630102', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 2 },
+  rearrangeBtnActive: { backgroundColor: '#810100' },
+  rearrangeBtnText: { color: '#666666', fontFamily: 'Outfit_700Bold', fontSize: 15 },
+  rearrangeBtnTextActive: { color: '#FFFFFF' },
   createBtn: { backgroundColor: '#0a84ff', borderRadius: 14, padding: 18, alignItems: 'center' },
   createBtnText: { color: '#FFFFFF', fontFamily: 'Outfit_900Black', fontSize: 18 } });

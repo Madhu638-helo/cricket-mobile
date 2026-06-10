@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 export default {
   expo: {
-    name: 'Cricket Score Pro',
+    name: 'CricPro',
     slug: 'cricket-mobile',
     version: '1.0.0',
     orientation: 'portrait',
