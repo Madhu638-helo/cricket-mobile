@@ -514,14 +514,11 @@ export default function ScoringScreen() {
   const battingFirstTeamId = match?.batting_first;
   const chasingTeamId = match?.batting_first === match?.team1_id ? match?.team2_id : match?.team1_id;
 
-  const isTeamAScorer = !!(myPlayer?.is_scorer && myPlayer.team_id === battingFirstTeamId);
-  const isTeamBScorer = !!(myPlayer?.is_scorer && myPlayer.team_id === chasingTeamId);
-
-  // You can only score if you are the designated scorer for the CURRENTLY batting team
-  const canScoreNow = (match?.status === 'innings_1' && isTeamAScorer) || (match?.status === 'innings_2' && isTeamBScorer);
+  // Scorer can score any innings
+  const canScoreNow = (match?.status === 'innings_1' || match?.status === 'innings_2') && !!myPlayer?.is_scorer;
   
-  // During innings break, the chasing team's scorer is the one who starts Innings 2
-  const canStartInnings2 = (match?.status === 'innings_break' && isTeamBScorer);
+  // Scorer or owner can start second innings
+  const canStartInnings2 = match?.status === 'innings_break' && (!!myPlayer?.is_scorer || isOwner);
 
   // We show the scoring screen if you have ANY administrative capability at this moment.
   const showScoringScreen = canScoreNow || canStartInnings2;
@@ -688,10 +685,13 @@ export default function ScoringScreen() {
       // After odd runs: strike rotates → next ball's striker is this ball's non_striker
       // End of over: both ends swap → next ball's striker is this ball's non_striker
       const dbLegal = dbBalls.filter((b: any) => b.extra_type !== 'wide' && b.extra_type !== 'noball').length;
+      const dbWickets = dbBalls.filter((b: any) => b.is_wicket).length;
+      const isSingleBatting = dbWickets >= (battingPlayers.length || 10) - 1;
+      
       const isEndOfOver = dbLegal > 0 && dbLegal % 6 === 0;
       const isOddRuns = !isEndOfOver && last.extra_type !== 'wide' && ((last.runs_off_bat ?? 0) % 2 === 1);
 
-      if (isEndOfOver || isOddRuns) {
+      if ((isEndOfOver || isOddRuns) && !isSingleBatting) {
         // Strike has rotated — non_striker_id becomes the new striker
         setStrikerId((last as any).non_striker_id ?? last.batsman_id);
         setNonStrikerId(last.batsman_id);
@@ -718,12 +718,13 @@ export default function ScoringScreen() {
     if (!showScoringScreen || !currentInnings) return;
     if (showWicket || showRunOut || showBatsman || showNonStriker || showBowler ||
         showBowlerOptions || bowlerNeededAfterWicket || newBatsmanIsNonStriker) return;
-    if (!strikerId && battingPlayers.length > 0) setShowBatsman(true);
-    else if (!nonStrikerId && battingPlayers.length > 0) setShowNonStriker(true);
+    if (!strikerId && availableBatsmen.length > 0) setShowBatsman(true);
+    else if (!nonStrikerId && availableBatsmen.length > 0) setShowNonStriker(true);
     else if (!bowlerId && bowlingPlayers.length > 0) setShowBowler(true);
   }, [showScoringScreen, currentInnings?.id, strikerId, nonStrikerId, bowlerId,
       showWicket, showRunOut, showBatsman, showNonStriker, showBowler,
-      showBowlerOptions, bowlerNeededAfterWicket, newBatsmanIsNonStriker]);
+      showBowlerOptions, bowlerNeededAfterWicket, newBatsmanIsNonStriker,
+      availableBatsmen.length, bowlingPlayers.length]);
 
   const addBall = useCallback(({ runsOffBat = 0, extraType = null as ExtraType | null, extraRuns = 0, isWicket = false, wicketType = null as WicketType | null, batsmanIdOverride = null as string | null, fielderIdOverride = null as string | null } = {}) => {
     if (!currentInnings || !strikerId || !bowlerId) {
@@ -795,7 +796,8 @@ export default function ScoringScreen() {
     // Suppress for run-outs (batsmanIdOverride set) — the RunOutModal handler computes
     // strikerId/nonStrikerId explicitly based on who crossed and who was dismissed.
     const rotateStrike = !batsmanIdOverride && extraType !== 'wide' && (runsOffBat % 2 === 1);
-    if (rotateStrike) {
+    const isSingleBatting = (baseWicketsChk + pendingWickets + (isWicket ? 1 : 0)) >= (battingPlayers.length || 10) - 1;
+    if (rotateStrike && !isSingleBatting) {
       setStrikerId(nonStrikerId);
       setNonStrikerId(strikerId);
     }
@@ -806,7 +808,7 @@ export default function ScoringScreen() {
 
     if (isWicket) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      sendLocalNotification('Wicket! 🏏', `A wicket has fallen. (${currentInnings.total_runs}/${currentInnings.wickets + 1})`);
+      sendLocalNotification('Wicket! 🏏', `A wicket has fallen. (${currentInnings.total_runs}/${currentInnings.total_wickets + 1})`);
     } else if (runsOffBat >= 4) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } else {
@@ -853,8 +855,9 @@ export default function ScoringScreen() {
       const baseWicketsChk = submittedTotal?.wickets ?? 0;
       const totalWicketsAfter = baseWicketsChk + pendingWickets + 1; // +1 for this ball
       const allOutLimit = battingPlayers.length || 10;
-      const noMoreBatsmen = (availableBatsmen.length === 0);
-      if (noMoreBatsmen || totalWicketsAfter >= allOutLimit) {
+      
+      // Single Batting: ONLY end if totalWicketsAfter >= allOutLimit
+      if (totalWicketsAfter >= allOutLimit) {
         // Submit the partial over immediately to trigger innings_end
         submitOver([...pendingBalls, ball], legalAfter);
         return;
@@ -1343,8 +1346,15 @@ export default function ScoringScreen() {
               setBowlerNeededAfterWicket(overEnds);
               setNewBatsmanIsNonStriker(overEnds);
               setShowBatsman(true);
-            } else if (overEnds) {
-              setShowBowler(true);
+            } else {
+              // Single batting: survivor takes strike
+              if (nonStrikerId) {
+                setStrikerId(nonStrikerId);
+                setNonStrikerId('');
+              } else {
+                setStrikerId('');
+              }
+              if (overEnds) setShowBowler(true);
             }
           }
         }}
@@ -1393,38 +1403,45 @@ export default function ScoringScreen() {
             fielderIdOverride: fielderId,
           });
 
-          if (survivorOnStrike && !overEnds) {
-            // Survivor is on strike
-            setStrikerId(survivorId);
-            setNonStrikerId(''); // cleared — new batsman will fill the non-striker slot
-          } else if (!survivorOnStrike && !overEnds) {
-            // Survivor is NOT on strike — they're the non-striker
-            setNonStrikerId(survivorId);
-            setStrikerId(''); // new batsman is the striker
-          } else if (overEnds) {
-            // Over just ended — ends swap again for the new over
-            // After over: striker's end becomes non-striker's end
-            // survivorOnStrike at end of THIS over → they'll be non-striker for next over
-            if (survivorOnStrike) {
-              setNonStrikerId(survivorId); // currently striker, but over ends → becomes NS
-              setStrikerId('');
-            } else {
-              setStrikerId(survivorId); // currently non-striker, over ends → becomes striker
-              setNonStrikerId('');
-            }
-          }
+          const isSingleBatting = (submittedTotal?.wickets ?? 0) + pendingWickets + 1 >= (battingPlayers.length || 10) - 1;
 
-          // Show new batsman modal
-          if (availableBatsmen.length > 0) {
-            setBowlerNeededAfterWicket(overEnds);
-            setNewBatsmanIsNonStriker(
-              overEnds
-                ? !survivorOnStrike  // if survivor is NS after over-end, new batsman is striker
-                : survivorOnStrike   // if survivor is on strike, new batsman is non-striker
-            );
-            setShowBatsman(true);
-          } else if (overEnds) {
-            setShowBowler(true);
+          if (isSingleBatting) {
+            // Single Batting: Survivor always takes strike, no ends swap
+            setStrikerId(survivorId);
+            setNonStrikerId('');
+            if (overEnds) setShowBowler(true);
+          } else {
+            if (survivorOnStrike && !overEnds) {
+              // Survivor is on strike
+              setStrikerId(survivorId);
+              setNonStrikerId(''); // cleared — new batsman will fill the non-striker slot
+            } else if (!survivorOnStrike && !overEnds) {
+              // Survivor is NOT on strike — they're the non-striker
+              setNonStrikerId(survivorId);
+              setStrikerId(''); // new batsman is the striker
+            } else if (overEnds) {
+              // Over just ended — ends swap again for the new over
+              // After over: striker's end becomes non-striker's end
+              // survivorOnStrike at end of THIS over → they'll be non-striker for next over
+              if (survivorOnStrike) {
+                setNonStrikerId(survivorId); // currently striker, but over ends → becomes NS
+                setStrikerId('');
+              } else {
+                setStrikerId(survivorId); // currently non-striker, over ends → becomes striker
+                setNonStrikerId('');
+              }
+            }
+
+            // Show new batsman modal
+            if (availableBatsmen.length > 0) {
+              setBowlerNeededAfterWicket(overEnds);
+              setNewBatsmanIsNonStriker(
+                overEnds
+                  ? !survivorOnStrike  // if survivor is NS after over-end, new batsman is striker
+                  : survivorOnStrike   // if survivor is on strike, new batsman is non-striker
+              );
+              setShowBatsman(true);
+            }
           }
         }}
         onClose={() => { setShowRunOut(false); }}
@@ -1441,8 +1458,15 @@ export default function ScoringScreen() {
             setBowlerNeededAfterWicket(overEnds);
             setNewBatsmanIsNonStriker(overEnds);
             setShowBatsman(true);
-          } else if (overEnds) {
-            setShowBowler(true);
+          } else {
+            // Single batting: survivor takes strike
+            if (nonStrikerId) {
+              setStrikerId(nonStrikerId);
+              setNonStrikerId('');
+            } else {
+              setStrikerId('');
+            }
+            if (overEnds) setShowBowler(true);
           }
         }}
         onClose={() => setShowCaughtWicket(false)}
@@ -1453,7 +1477,7 @@ export default function ScoringScreen() {
         bowlingPlayers={bowlingPlayers}
         onConfirm={({ runsScored, fielderId }: any) => {
           setShowDroppedCatch(false);
-          addBall({ runsOffBat: runsScored, isWicket: false, wicketType: 'dropped', fielderIdOverride: fielderId });
+          addBall({ runsOffBat: runsScored, isWicket: false, wicketType: null, fielderIdOverride: fielderId });
         }}
         onClose={() => setShowDroppedCatch(false)}
       />
