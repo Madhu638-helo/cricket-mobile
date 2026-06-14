@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  SafeAreaView, Alert, ActivityIndicator, StatusBar, Share, RefreshControl, Switch
+  SafeAreaView, Alert, ActivityIndicator, StatusBar, Share, RefreshControl, Switch, Modal
 } from 'react-native';
 import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -35,7 +35,8 @@ export default function ProfileScreen() {
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioLabel, setBioLabel] = useState('Face ID');
   const viewShotRef = React.useRef<any>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exportModalVisible, setExportModalVisible] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [exportData, setExportData] = useState<any>(null);
 
   useEffect(() => { 
@@ -120,21 +121,27 @@ export default function ProfileScreen() {
   };
 
   const handleExport = async () => {
-    if (exporting) return;
-    setExporting(true);
     setExportData({ player: { name: userName, mvps: stats.mvps }, stats, daily: { date: new Date().toISOString() } });
+    setExportModalVisible(true);
+  };
+
+  const executeExport = async () => {
+    if (sharing) return;
+    setSharing(true);
     setTimeout(async () => {
-      if (viewShotRef.current) {
-        try {
+      try {
+        if (viewShotRef.current) {
           const uri = await viewShotRef.current.capture();
           await Sharing.shareAsync(uri, { dialogTitle: 'Share Turf Titans Stats' });
-        } catch (e) {
-          console.error(e);
+          setExportModalVisible(false);
         }
+      } catch (e) {
+        console.error(e);
+        Alert.alert("Export Failed", "Could not generate the image.");
+      } finally {
+        setSharing(false);
       }
-      setExporting(false);
-      setExportData(null);
-    }, 500);
+    }, 100);
   };
 
   if (loading) {
@@ -145,70 +152,81 @@ export default function ProfileScreen() {
     <View style={C.screen}>
       <StatusBar barStyle="dark-content" backgroundColor="#EDEBDE" />
 
-      {/* Hidden ViewShot for Exporting Image */}
-      {exportData && (
-        <View style={{ position: 'absolute', top: 0, left: 0, zIndex: 100, transform: [{ translateX: 10000 }] }}>
-          <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1.0, result: 'tmpfile' }}>
-            <View style={{ width: 400, backgroundColor: '#0a0a0a', padding: 24, borderRadius: 20, borderColor: 'rgba(249,115,22, 0.4)', borderWidth: 2 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-                <View>
-                  <Text style={{ color: '#f97316', fontSize: 14, fontWeight: 'bold', letterSpacing: 2 }}>{exportData.player.name.toUpperCase()}</Text>
-                  <Text style={{ color: '#FFFFFF', fontSize: 32, fontWeight: '900', fontFamily: 'Outfit_900Black', marginTop: 4 }}>PLAYER STATS</Text>
-                </View>
-                <View style={{ alignItems: 'center' }}>
-                  <Text style={{ fontSize: 32 }}>🏆</Text>
-                  <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 'bold', marginTop: 4 }}>{Array(exportData.player.mvps).fill('★').join('') || 'PLAYER'}</Text>
-                </View>
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
-                <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>MATCHES</Text>
-                  <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{exportData.stats.matches}</Text>
-                </View>
-                <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>WIN RATE</Text>
-                  <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>
-                    {exportData.stats.matches > 0 ? Math.round((exportData.stats.wins / exportData.stats.matches) * 100) : 0}%
-                  </Text>
-                </View>
-              </View>
-
-              <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#30d158', paddingLeft: 8 }}>BATTING</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
-                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>RUNS</Text>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.runs}</Text>
-                </View>
-                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>STRIKE RATE</Text>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.strikeRate || 0}</Text>
-                </View>
-                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>BOUNDARIES</Text>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.fours}x4 / {exportData.stats.sixes}x6</Text>
-                </View>
-              </View>
-
-              <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#f87171', paddingLeft: 8 }}>BOWLING</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
-                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(248,113,113,0.1)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#f87171', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>WICKETS</Text>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.wickets}</Text>
-                </View>
-                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(248,113,113,0.1)', padding: 16, borderRadius: 16 }}>
-                  <Text style={{ color: '#f87171', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>ECONOMY</Text>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.economy || 0}</Text>
-                </View>
-              </View>
-
-              <View style={{ alignItems: 'center', marginTop: 8 }}>
-                <Text style={{ color: '#f97316', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>POWERED BY ANTIGRAVITY</Text>
-              </View>
+      {/* Visible Export Modal to prevent iOS culling */}
+      <Modal visible={exportModalVisible} transparent={true} animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)' }}>
+          <SafeAreaView style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20 }}>
+              <TouchableOpacity onPress={() => setExportModalVisible(false)} style={{ padding: 8 }}>
+                <Text style={{ color: '#fff', fontSize: 18 }}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Export Preview</Text>
+              <TouchableOpacity onPress={executeExport} disabled={sharing} style={{ padding: 8, backgroundColor: '#f97316', borderRadius: 8 }}>
+                {sharing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Share</Text>}
+              </TouchableOpacity>
             </View>
-          </ViewShot>
+            <ScrollView contentContainerStyle={{ padding: 20, alignItems: 'center', paddingBottom: 60 }}>
+              {exportData && (
+                <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1.0, result: 'tmpfile' }}>
+                  <View style={{ width: 400, backgroundColor: '#0a0a0a', padding: 24, borderRadius: 20, borderColor: 'rgba(249,115,22, 0.4)', borderWidth: 2 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+                      <View>
+                        <Text style={{ color: '#f97316', fontSize: 14, fontWeight: 'bold', letterSpacing: 2 }}>{exportData.player.name.toUpperCase()}</Text>
+                        <Text style={{ color: '#FFFFFF', fontSize: 32, fontWeight: '900', fontFamily: 'Outfit_900Black', marginTop: 4 }}>PLAYER STATS</Text>
+                      </View>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ fontSize: 32 }}>🏆</Text>
+                        <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 'bold', marginTop: 4 }}>{Array(exportData.player.mvps).fill('★').join('') || 'PLAYER'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+                      <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>MATCHES</Text>
+                        <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{exportData.stats.matches}</Text>
+                      </View>
+                      <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>WIN RATE</Text>
+                        <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>
+                          {exportData.stats.matches > 0 ? Math.round((exportData.stats.wins / exportData.stats.matches) * 100) : 0}%
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#30d158', paddingLeft: 8 }}>BATTING</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+                      <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>RUNS</Text>
+                        <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.runs}</Text>
+                      </View>
+                      <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>STRIKE RATE</Text>
+                        <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.strikeRate || 0}</Text>
+                      </View>
+                      <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>BOUNDARIES</Text>
+                        <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.fours}x4 / {exportData.stats.sixes}x6</Text>
+                      </View>
+                    </View>
+
+                    <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#f87171', paddingLeft: 8 }}>BOWLING</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
+                      <View style={{ flexBasis: '47%', backgroundColor: 'rgba(248,113,113,0.1)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#f87171', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>WICKETS</Text>
+                        <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.wickets}</Text>
+                      </View>
+                      <View style={{ flexBasis: '47%', backgroundColor: 'rgba(248,113,113,0.1)', padding: 16, borderRadius: 16 }}>
+                        <Text style={{ color: '#f87171', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>ECONOMY</Text>
+                        <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.economy || 0}</Text>
+                      </View>
+                    </View>
+                  </View>
+                </ViewShot>
+              )}
+            </ScrollView>
+          </SafeAreaView>
         </View>
-      )}
+      </Modal>
 
       <SafeAreaView style={[C.safe, { backgroundColor: '#EDEBDE', flex: 1 }]}>
         <ScrollView 
@@ -221,8 +239,8 @@ export default function ProfileScreen() {
           <View style={C.headerRow}>
             <Text style={C.headerTitle}>Profile</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              <TouchableOpacity style={C.signOutBtn} onPress={handleExport} disabled={exporting}>
-                {exporting ? <ActivityIndicator size="small" color="#810100" /> : <Ionicons name="share-outline" size={20} color="#810100" />}
+              <TouchableOpacity style={C.signOutBtn} onPress={handleExport}>
+                <Ionicons name="share-outline" size={20} color="#810100" />
               </TouchableOpacity>
               <TouchableOpacity style={C.signOutBtn} onPress={handleSignOut}>
                 <Ionicons name="log-out-outline" size={20} color="#810100" />

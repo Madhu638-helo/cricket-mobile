@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, SafeAreaView,
-  ActivityIndicator, TouchableOpacity, StatusBar, RefreshControl
+  ActivityIndicator, TouchableOpacity, StatusBar, RefreshControl, Modal, Alert
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import LoadingScreen from '../../components/LoadingScreen';
@@ -28,6 +28,10 @@ export default function LeaderboardScreen() {
   const [tab, setTab] = useState<Tab>('batting');
 
   const leaders = tab === 'batting' ? battingLeaders : bowlingLeaders;
+
+  const viewShotRef = React.useRef<any>(null);
+  const [exportModalVisible, setExportModalVisible] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   useEffect(() => { loadLeaderboard(); }, [tab]);
 
@@ -141,87 +145,110 @@ export default function LeaderboardScreen() {
     finally { setLoading(false); }
   };
 
-  const viewShotRef = React.useRef<any>(null);
-  const [exporting, setExporting] = useState(false);
-
   const handleExport = async () => {
-    if (exporting) return;
-    setExporting(true);
+    setExportModalVisible(true);
+  };
+
+  const executeExport = async () => {
+    if (sharing) return;
+    setSharing(true);
     setTimeout(async () => {
-      if (viewShotRef.current) {
-        try {
+      try {
+        if (viewShotRef.current) {
           const uri = await viewShotRef.current.capture();
           await Sharing.shareAsync(uri, { dialogTitle: 'Share Turf Titans Rankings' });
-        } catch (e) {
-          console.error(e);
+          setExportModalVisible(false);
         }
+      } catch (e) {
+        console.error(e);
+        Alert.alert("Export Failed", "Could not generate the image.");
+      } finally {
+        setSharing(false);
       }
-      setExporting(false);
-    }, 500);
+    }, 100);
   };
 
   return (
     <View style={C.screen}>
       <StatusBar barStyle="dark-content" backgroundColor="#EDEBDE" />
 
-      {/* Hidden ViewShot for Exporting Image */}
-      <View style={{ position: 'absolute', top: 0, left: 0, zIndex: 100, transform: [{ translateX: 10000 }] }}>
-        <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1.0, result: 'tmpfile' }}>
-          <View style={{ width: 400, backgroundColor: '#0a0a0a', padding: 24, borderRadius: 20, borderColor: 'rgba(249,115,22, 0.4)', borderWidth: 2 }}>
-            
-            {/* Header */}
-            <View style={{ alignItems: 'center', marginBottom: 24 }}>
-              <Text style={{ color: '#f97316', fontSize: 14, fontWeight: 'bold', letterSpacing: 2, textTransform: 'uppercase' }}>TURF TITANS</Text>
-              <Text style={{ color: '#FFFFFF', fontSize: 32, fontWeight: '900', fontFamily: 'Outfit_900Black', marginTop: 4 }}>SEASON LEADERS</Text>
+      {/* Visible Export Modal to prevent iOS culling */}
+      <Modal visible={exportModalVisible} transparent={true} animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)' }}>
+          <SafeAreaView style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20 }}>
+              <TouchableOpacity onPress={() => setExportModalVisible(false)} style={{ padding: 8 }}>
+                <Text style={{ color: '#fff', fontSize: 18 }}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Export Preview</Text>
+              <TouchableOpacity onPress={executeExport} disabled={sharing} style={{ padding: 8, backgroundColor: '#f97316', borderRadius: 8 }}>
+                {sharing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Share</Text>}
+              </TouchableOpacity>
             </View>
+            <ScrollView contentContainerStyle={{ padding: 20, alignItems: 'center', paddingBottom: 60 }}>
+              <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1.0, result: 'tmpfile' }}>
+                <View style={{ width: 850, backgroundColor: '#0a0a0a', padding: 32, borderRadius: 20, borderColor: 'rgba(249,115,22, 0.4)', borderWidth: 2 }}>
+                  
+                  {/* Header */}
+                  <View style={{ alignItems: 'center', marginBottom: 32 }}>
+                    <Text style={{ color: '#FFFFFF', fontSize: 44, fontWeight: '900', fontFamily: 'Outfit_900Black' }}>SEASON LEADERS</Text>
+                  </View>
 
-            {/* BATTING */}
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#30d158', paddingLeft: 8 }}>BATTING RANKINGS</Text>
-            <View style={{ gap: 12, marginBottom: 24 }}>
-              {battingLeaders.map((l, i) => (
-                <View key={`bat-${i}`} style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 12, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 24, marginRight: 12, minWidth: 28, textAlign: 'center' }}>
-                    {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <Text style={{ fontSize: 16, color: '#aaa', fontWeight: 'bold' }}>{i + 1}</Text>}
-                  </Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>{l.name}</Text>
-                    <Text style={{ color: '#aaa', fontSize: 11 }}>SR {l.s2}  •  4s/6s {l.s3}</Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    {/* BATTING COLUMN */}
+                    <View style={{ flex: 1, paddingRight: 24 }}>
+                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 20, borderLeftWidth: 4, borderLeftColor: '#30d158', paddingLeft: 12 }}>BATTING RANKINGS</Text>
+                      <View style={{ gap: 12, marginBottom: 24 }}>
+                        {battingLeaders.map((l, i) => (
+                          <View key={`bat-${i}`} style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', padding: 14, borderRadius: 12, alignItems: 'center' }}>
+                            <Text style={{ fontSize: 24, marginRight: 16, minWidth: 28, textAlign: 'center' }}>
+                              {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <Text style={{ fontSize: 16, color: '#aaa', fontWeight: 'bold' }}>{i + 1}</Text>}
+                            </Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>{l.name}</Text>
+                              <Text style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>SR {l.s2}  •  4s/6s {l.s3}</Text>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={{ color: '#30d158', fontSize: 22, fontWeight: '900' }}>{l.primary.split(' ')[0]}</Text>
+                              <Text style={{ color: '#aaa', fontSize: 10, fontWeight: 'bold', marginTop: 2 }}>RUNS</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+
+                    {/* DIVIDER */}
+                    <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginHorizontal: 8 }} />
+
+                    {/* BOWLING COLUMN */}
+                    <View style={{ flex: 1, paddingLeft: 24 }}>
+                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 20, borderLeftWidth: 4, borderLeftColor: '#f87171', paddingLeft: 12 }}>BOWLING RANKINGS</Text>
+                      <View style={{ gap: 12, marginBottom: 24 }}>
+                        {bowlingLeaders.map((l, i) => (
+                          <View key={`bowl-${i}`} style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', padding: 14, borderRadius: 12, alignItems: 'center' }}>
+                            <Text style={{ fontSize: 24, marginRight: 16, minWidth: 28, textAlign: 'center' }}>
+                              {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <Text style={{ fontSize: 16, color: '#aaa', fontWeight: 'bold' }}>{i + 1}</Text>}
+                            </Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>{l.name}</Text>
+                              <Text style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>Eco {l.s2}  •  Ovs {l.s3}</Text>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={{ color: '#f87171', fontSize: 22, fontWeight: '900' }}>{l.primary}</Text>
+                              <Text style={{ color: '#aaa', fontSize: 10, fontWeight: 'bold', marginTop: 2 }}>WKTS</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
                   </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ color: '#30d158', fontSize: 20, fontWeight: '900' }}>{l.primary.split(' ')[0]}</Text>
-                    <Text style={{ color: '#aaa', fontSize: 10, fontWeight: 'bold' }}>RUNS</Text>
-                  </View>
+
                 </View>
-              ))}
-            </View>
-
-            {/* BOWLING */}
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#f87171', paddingLeft: 8 }}>BOWLING RANKINGS</Text>
-            <View style={{ gap: 12, marginBottom: 24 }}>
-              {bowlingLeaders.map((l, i) => (
-                <View key={`bowl-${i}`} style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 12, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 24, marginRight: 12, minWidth: 28, textAlign: 'center' }}>
-                    {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <Text style={{ fontSize: 16, color: '#aaa', fontWeight: 'bold' }}>{i + 1}</Text>}
-                  </Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>{l.name}</Text>
-                    <Text style={{ color: '#aaa', fontSize: 11 }}>Eco {l.s2}  •  Ovs {l.s3}</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ color: '#f87171', fontSize: 20, fontWeight: '900' }}>{l.primary}</Text>
-                    <Text style={{ color: '#aaa', fontSize: 10, fontWeight: 'bold' }}>WKTS</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-
-            <View style={{ alignItems: 'center', marginTop: 8 }}>
-              <Text style={{ color: '#f97316', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>POWERED BY ANTIGRAVITY</Text>
-            </View>
-
-          </View>
-        </ViewShot>
-      </View>
+              </ViewShot>
+            </ScrollView>
+          </SafeAreaView>
+        </View>
+      </Modal>
 
       <SafeAreaView style={[C.safe, { backgroundColor: '#EDEBDE', flex: 1 }]}>
         {/* Header */}
@@ -230,8 +257,8 @@ export default function LeaderboardScreen() {
             <Text style={C.title}>Rankings</Text>
             <Text style={C.subtitle}>Season leaders & records</Text>
           </View>
-          <TouchableOpacity onPress={handleExport} disabled={exporting} style={{ padding: 8, backgroundColor: '#FFFFFF', borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, elevation: 2 }}>
-            {exporting ? <ActivityIndicator size="small" color="#810100" /> : <Text style={{ fontSize: 20 }}>📤</Text>}
+          <TouchableOpacity onPress={handleExport} style={{ padding: 8, backgroundColor: '#FFFFFF', borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, elevation: 2 }}>
+            <Text style={{ fontSize: 20 }}>📤</Text>
           </TouchableOpacity>
         </View>
 
