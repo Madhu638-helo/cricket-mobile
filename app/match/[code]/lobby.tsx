@@ -27,6 +27,68 @@ export default function LobbyScreen() {
   const [savingOvers, setSavingOvers] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Quick Add Search
+  const [searchModalVisible, setSearchModalVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchTimeout, setSearchTimeout] = useState<NodeJS.Timeout | null>(null);
+
+  const fetchUsers = async (query: string) => {
+    setSearchLoading(true);
+    try {
+      const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/user/search?q=${encodeURIComponent(query)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const existingUserIds = new Set(players.map(p => p.user_id).filter(id => id));
+        const filtered = data.filter((u: any) => !existingUserIds.has(u.id));
+        setSearchResults(filtered);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const handleSearchChange = (text: string) => {
+    setSearchQuery(text);
+    if (searchTimeout) clearTimeout(searchTimeout);
+    setSearchTimeout(setTimeout(() => {
+      fetchUsers(text);
+    }, 300));
+  };
+
+  const handleAddSearchedUser = async (user: any, action: 'team_a' | 'team_b' | 'joker') => {
+    setSearchLoading(true);
+    try {
+      let team_id = null;
+      let is_joker = false;
+      if (action === 'team_a') team_id = teamA?.id;
+      else if (action === 'team_b') team_id = teamB?.id;
+      else if (action === 'joker') is_joker = true;
+
+      const { error } = await (supabase.from('players') as any).insert({
+        session_id: session!.id,
+        user_id: user.id,
+        name: user.name,
+        team_id,
+        is_joker,
+        role: 'PLAYER',
+        player_status: 'PLAYING',
+        approval_status: 'approved'
+      });
+
+      if (error) throw error;
+      await refetch();
+      setSearchResults(prev => prev.filter(u => u.id !== user.id));
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refetch();
@@ -251,6 +313,13 @@ export default function LobbyScreen() {
             </View>
           )}
 
+          {isOwner && (
+            <TouchableOpacity style={S.addPlayerBtn} onPress={() => { setSearchModalVisible(true); fetchUsers(''); }}>
+              <Ionicons name="person-add-outline" size={16} color="#810100" />
+              <Text style={S.addPlayerBtnText}>Quick Add Players</Text>
+            </TouchableOpacity>
+          )}
+
           {/* ── Team A ── */}
           {teamA && (
             <View style={[S.teamCard, { borderColor: '#81010022' }]}>
@@ -399,6 +468,57 @@ export default function LobbyScreen() {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      {/* ── Search Players Modal ── */}
+      <Modal visible={searchModalVisible} transparent animationType="slide">
+        <View style={S.modalOverlay}>
+          <View style={[S.modalSheet, { height: '85%' }]}>
+            <View style={S.modalHandle} />
+            <View style={S.modalHeader}>
+              <Text style={S.modalPlayerName}>Quick Add Players</Text>
+            </View>
+            <TextInput
+              style={S.searchInput}
+              placeholder="Search by name or username..."
+              value={searchQuery}
+              onChangeText={handleSearchChange}
+              autoCapitalize="none"
+              autoFocus
+            />
+            {searchLoading && <ActivityIndicator color="#810100" style={{ marginVertical: 10 }} />}
+            <ScrollView style={{ flex: 1, marginTop: 10 }} keyboardShouldPersistTaps="handled">
+              {searchResults.map((u) => (
+                <View key={u.id} style={S.searchResultRow}>
+                  <View style={[S.avatar, { backgroundColor: '#9A9390' }]}>
+                    <Text style={S.avatarText}>{initials(u.name)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={S.playerName} numberOfLines={1}>{u.name}</Text>
+                    <Text style={S.searchUsername}>@{u.username}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <TouchableOpacity style={[S.badge, { backgroundColor: '#81010022', paddingVertical: 6, paddingHorizontal: 8 }]} onPress={() => handleAddSearchedUser(u, 'team_a')}>
+                      <Text style={[S.badgeText, { color: '#810100' }]}>Team A</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[S.badge, { backgroundColor: '#0a84ff22', paddingVertical: 6, paddingHorizontal: 8 }]} onPress={() => handleAddSearchedUser(u, 'team_b')}>
+                      <Text style={[S.badgeText, { color: '#0a84ff' }]}>Team B</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[S.badge, { backgroundColor: '#b8860b22', paddingVertical: 6, paddingHorizontal: 8 }]} onPress={() => handleAddSearchedUser(u, 'joker')}>
+                      <Text style={[S.badgeText, { color: '#b8860b' }]}>Joker</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+              {!searchLoading && searchResults.length === 0 && (
+                <Text style={S.emptyTeam}>No users found</Text>
+              )}
+            </ScrollView>
+            <TouchableOpacity style={S.modalClose} onPress={() => setSearchModalVisible(false)}>
+              <Text style={S.modalCloseText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -473,4 +593,11 @@ const S = StyleSheet.create({
   modalActionText: { fontFamily: 'Outfit_700Bold', fontSize: 13 },
   modalClose: { marginTop: 8, backgroundColor: '#F5F3EC', borderRadius: 12, padding: 14, alignItems: 'center' },
   modalCloseText: { color: '#5C5552', fontFamily: 'Outfit_700Bold', fontSize: 15 },
+
+  // Search
+  addPlayerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: 'rgba(129,1,0,0.1)' },
+  addPlayerBtnText: { color: '#810100', fontFamily: 'Outfit_700Bold', fontSize: 14 },
+  searchInput: { backgroundColor: '#F5F3EC', borderRadius: 10, padding: 14, color: '#1B1716', fontFamily: 'Outfit_600SemiBold', fontSize: 16, borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
+  searchResultRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.04)' },
+  searchUsername: { color: '#9A9390', fontFamily: 'Outfit_400Regular', fontSize: 12, marginTop: 2 },
 });

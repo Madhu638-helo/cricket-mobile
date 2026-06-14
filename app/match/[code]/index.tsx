@@ -514,11 +514,13 @@ export default function ScoringScreen() {
   const battingFirstTeamId = match?.batting_first;
   const chasingTeamId = match?.batting_first === match?.team1_id ? match?.team2_id : match?.team1_id;
 
-  // Scorer can score any innings
-  const canScoreNow = (match?.status === 'innings_1' || match?.status === 'innings_2') && !!myPlayer?.is_scorer;
+  // Only the scorer of the batting team can score
+  const isMyTeamBatting = currentInnings?.team_id === myPlayer?.team_id;
+  const canScoreNow = (match?.status === 'innings_1' || match?.status === 'innings_2') && !!myPlayer?.is_scorer && isMyTeamBatting;
   
-  // Scorer or owner can start second innings
-  const canStartInnings2 = match?.status === 'innings_break' && (!!myPlayer?.is_scorer || isOwner);
+  // Scorer of the chasing team or owner can start second innings
+  const isMyTeamChasing = myPlayer?.team_id === chasingTeamId;
+  const canStartInnings2 = match?.status === 'innings_break' && ((!!myPlayer?.is_scorer && isMyTeamChasing) || isOwner);
 
   // We show the scoring screen if you have ANY administrative capability at this moment.
   const showScoringScreen = canScoreNow || canStartInnings2;
@@ -673,33 +675,33 @@ export default function ScoringScreen() {
     // dbBalls is already sorted by delivery_number (from the Map dedup)
     const last = dbBalls[dbBalls.length - 1];
 
+    const dbLegal = dbBalls.filter((b: any) => b.extra_type !== 'wide' && b.extra_type !== 'noball').length;
+    const dbWickets = dbBalls.filter((b: any) => b.is_wicket).length;
+    const isSingleBatting = dbWickets >= (battingPlayers.length || 10) - 1;
+    
+    const isEndOfOver = dbLegal > 0 && dbLegal % 6 === 0;
+    const physicalRuns = (last.runs_off_bat ?? 0) + (['bye', 'legbye'].includes(last.extra_type) ? (last.extras ?? 0) : 0);
+    const isOddRuns = last.extra_type !== 'wide' && (physicalRuns % 2 === 1);
+
+    let rotateStrike = false;
+    if (isEndOfOver) {
+      rotateStrike = !isOddRuns; // Even runs -> rotate
+    } else {
+      rotateStrike = isOddRuns; // Odd runs -> rotate
+    }
+
+    const predictedStriker = (rotateStrike && !isSingleBatting) ? ((last as any).non_striker_id ?? last.batsman_id) : last.batsman_id;
+    const predictedNonStriker = (rotateStrike && !isSingleBatting) ? last.batsman_id : ((last as any).non_striker_id ?? '');
+
     if (isScorer) {
       // Scorer manages these manually via modals — only initialise if not yet set
-      if (!strikerId) setStrikerId(last.batsman_id);
-      if (!nonStrikerId) setNonStrikerId((last as any).non_striker_id ?? '');
+      if (!strikerId) setStrikerId(predictedStriker);
+      if (!nonStrikerId) setNonStrikerId(predictedNonStriker);
       if (!bowlerId) setBowlerId(last.bowler_id);
     } else {
-      // Viewers: derive on-strike from ball data directly.
-      // ball.batsman_id = striker at time of delivery
-      // ball.non_striker_id = non-striker at time of delivery
-      // After odd runs: strike rotates → next ball's striker is this ball's non_striker
-      // End of over: both ends swap → next ball's striker is this ball's non_striker
-      const dbLegal = dbBalls.filter((b: any) => b.extra_type !== 'wide' && b.extra_type !== 'noball').length;
-      const dbWickets = dbBalls.filter((b: any) => b.is_wicket).length;
-      const isSingleBatting = dbWickets >= (battingPlayers.length || 10) - 1;
-      
-      const isEndOfOver = dbLegal > 0 && dbLegal % 6 === 0;
-      const isOddRuns = !isEndOfOver && last.extra_type !== 'wide' && ((last.runs_off_bat ?? 0) % 2 === 1);
-
-      if ((isEndOfOver || isOddRuns) && !isSingleBatting) {
-        // Strike has rotated — non_striker_id becomes the new striker
-        setStrikerId((last as any).non_striker_id ?? last.batsman_id);
-        setNonStrikerId(last.batsman_id);
-      } else {
-        // No rotation — batsman_id remains on strike
-        setStrikerId(last.batsman_id);
-        setNonStrikerId((last as any).non_striker_id ?? '');
-      }
+      // Viewers: always derive on-strike from ball data directly.
+      setStrikerId(predictedStriker);
+      setNonStrikerId(predictedNonStriker);
       setBowlerId(last.bowler_id);
     }
   }, [dbBalls, isScorer]);
@@ -792,13 +794,28 @@ export default function ScoringScreen() {
       setDismissedIds(prev => new Set([...prev, dismissedId]));
     }
 
-    // Rotate strike on odd runs (unless wide). For NB, only rotate on odd off-bat runs.
-    // Suppress for run-outs (batsmanIdOverride set) — the RunOutModal handler computes
-    // strikerId/nonStrikerId explicitly based on who crossed and who was dismissed.
-    const rotateStrike = !batsmanIdOverride && extraType !== 'wide' && (runsOffBat % 2 === 1);
+    // Strike rotation logic:
+    // Normal ball: rotate on odd runs
+    // Last ball of over: rotate on EVEN runs (since bowler changes ends, cancelling the swap)
+    // Suppress for run-outs (batsmanIdOverride set)
+    // For NB, only rotate on off-bat runs.
+    const isExtraRotate = extraType === 'wide' || extraType === 'noball';
+    const isLastBallOfOver = !isExtraRotate && (stableBaseBalls + pendingLegal + 1) % 6 === 0;
+    const physicalRuns = runsOffBat + (['bye', 'legbye'].includes(extraType as string) ? extraRuns : 0);
+    const isOddRuns = physicalRuns % 2 === 1;
+    
+    let rotateStrike = false;
+    if (!batsmanIdOverride && extraType !== 'wide') {
+      if (isLastBallOfOver) {
+        rotateStrike = !isOddRuns; // Even runs -> 1 rotation (bowler change)
+      } else {
+        rotateStrike = isOddRuns;  // Odd runs -> 1 rotation (batsmen cross)
+      }
+    }
+
     const isSingleBatting = (baseWicketsChk + pendingWickets + (isWicket ? 1 : 0)) >= (battingPlayers.length || 10) - 1;
     if (rotateStrike && !isSingleBatting) {
-      setStrikerId(nonStrikerId);
+      setStrikerId(nonStrikerId!);
       setNonStrikerId(strikerId);
     }
 
@@ -1260,7 +1277,42 @@ export default function ScoringScreen() {
               </View>
             )}
 
-            {/* Run buttons */}
+            {/* Run buttons & Quick Undo */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 6 }}>
+              <Text style={{ fontFamily: 'Outfit_600SemiBold', fontSize: 12, color: '#9A9390', marginLeft: 4, marginBottom: 2 }}>Runs Off Bat</Text>
+              <TouchableOpacity 
+                style={{ paddingVertical: 6, paddingHorizontal: 12, backgroundColor: 'rgba(211, 47, 47, 0.08)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(211, 47, 47, 0.2)' }}
+                onPress={async () => {
+                  Alert.alert('Confirm Undo', 'Are you sure you want to completely remove the last ball bowled in this innings?', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Undo Ball', style: 'destructive', onPress: async () => {
+                        setStrikerId('');
+                        setNonStrikerId('');
+                        setBowlerId('');
+                        if (pendingBalls.length > 0) {
+                          const lastPending = pendingBalls[pendingBalls.length - 1];
+                          setPendingBalls(prev => prev.slice(0, -1));
+                          await (supabase.from('balls') as any).delete()
+                            .eq('innings_id', currentInnings?.id)
+                            .eq('delivery_number', lastPending.delivery_number);
+                          deliveryCounterRef.current = Math.max(0, deliveryCounterRef.current - 1);
+                          refetch();
+                        } else {
+                          await fetch(`${process.env.EXPO_PUBLIC_API_URL}/match/${code}/action`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'undo_last_ball', data: { matchId: match?.id, inningsId: currentInnings?.id } })
+                          });
+                          refetch();
+                        }
+                    }}
+                  ]);
+                }}
+              >
+                <Text style={{ color: '#d32f2f', fontFamily: 'Outfit_800ExtraBold', fontSize: 13 }}>↩️ Undo Last Ball</Text>
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.runRow}>
               {[0, 1, 2, 3, 4, 6].map(r => (
                 <TouchableOpacity
@@ -1314,8 +1366,21 @@ export default function ScoringScreen() {
             {/* Batsman/Bowler quick swap */}
             <View style={styles.swapRow}>
               <TouchableOpacity style={styles.swapBtn} onPress={() => setShowBatsman(true)}>
-                <Text style={styles.swapBtnText}>🏏 {striker?.name ?? 'Batsman'}</Text>
+                <Text style={styles.swapBtnText}>🏏 {striker?.name ?? 'Striker'}</Text>
               </TouchableOpacity>
+              
+              <TouchableOpacity style={[styles.swapBtn, { flex: 0, paddingHorizontal: 12, backgroundColor: 'rgba(0,0,0,0.03)' }]} onPress={() => {
+                const s = strikerId;
+                setStrikerId(nonStrikerId!);
+                setNonStrikerId(s);
+              }}>
+                <Text style={styles.swapBtnText}>🔄</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.swapBtn} onPress={() => setShowNonStriker(true)}>
+                <Text style={styles.swapBtnText}>🏏 {nonStriker?.name ?? 'Non-Striker'}</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity style={styles.swapBtn} onPress={() => setShowBowler(true)}>
                 <Text style={styles.swapBtnText}>🎳 {bowler?.name ?? 'Bowler'}</Text>
               </TouchableOpacity>

@@ -56,7 +56,7 @@ export default function LeaderboardScreen() {
           (supabase.from('bowling_career_stats') as any).select('user_id, wickets').order('wickets', { ascending: false }).limit(1).maybeSingle(),
           (supabase.from('bowling_career_stats') as any).select('user_id, economy, overs_bowled').gte('overs_bowled', 2).order('economy', { ascending: true }).limit(1).maybeSingle(),
           (supabase.from('batting_career_stats') as any).select('user_id, sixes, fours').order('sixes', { ascending: false }).limit(1).maybeSingle(),
-          (supabase.from('batting_career_stats') as any).select('user_id, strike_rate, balls_faced').gte('balls_faced', 10).order('strike_rate', { ascending: false }).limit(1).maybeSingle(),
+          (supabase.from('batting_career_stats') as any).select('user_id, strike_rate, balls_faced').gte('balls_faced', 6).order('strike_rate', { ascending: false }).limit(1).maybeSingle(),
           (supabase.from('users') as any).select('id, name')
         ]);
 
@@ -74,9 +74,9 @@ export default function LeaderboardScreen() {
         }
         
         const sortedTeams = Object.keys(teamWins).sort((a, b) => teamWins[b] - teamWins[a]);
-        const teamA = sortedTeams[0] || 'Team A';
+        const teamA = sortedTeams[0] || '-';
         const teamAWins = teamWins[teamA] || 0;
-        const teamB = sortedTeams[1] || 'Team B';
+        const teamB = sortedTeams[1] || '-';
         const teamBWins = teamWins[teamB] || 0;
 
         setChampionsData({
