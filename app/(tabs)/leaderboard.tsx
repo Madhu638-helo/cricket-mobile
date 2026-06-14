@@ -165,7 +165,7 @@ export default function LeaderboardScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#EDEBDE" />
 
       {/* Hidden ViewShot for Exporting Image */}
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: -1, pointerEvents: 'none' }}>
+      <View style={{ position: 'absolute', top: 0, left: 0, zIndex: 100, transform: [{ translateX: 10000 }] }}>
         <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1.0, result: 'tmpfile' }}>
           <View style={{ width: 400, backgroundColor: '#0a0a0a', padding: 24, borderRadius: 20, borderColor: 'rgba(249,115,22, 0.4)', borderWidth: 2 }}>
             

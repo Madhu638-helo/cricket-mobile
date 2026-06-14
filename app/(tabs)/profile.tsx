@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   SafeAreaView, Alert, ActivityIndicator, StatusBar, Share, RefreshControl, Switch
 } from 'react-native';
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -23,8 +25,8 @@ export default function ProfileScreen() {
   const { user, userName, refreshSession } = useAuth();
   const router = useRouter();
   const [stats, setStats] = useState({
-    runs: 0, wickets: 0, catches: 0, drops: 0, runOuts: 0, stumpings: 0, matches: 0,
-    highestScore: 0, bestBowlingWkts: 0, bestBowlingRuns: 0, fifties: 0, sixes: 0, fours: 0,
+    runs: 0, wickets: 0, catches: 0, drops: 0, runOuts: 0, stumpings: 0, matches: 0, wins: 0, mvps: 0,
+    highestScore: 0, bestBowlingWkts: 0, bestBowlingRuns: 0, fifties: 0, sixes: 0, fours: 0, strikeRate: 0, economy: 0,
   });
   const [recentMatches, setRecentMatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,6 +34,9 @@ export default function ProfileScreen() {
   const [bioEnabled, setBioEnabled] = useState(false);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioLabel, setBioLabel] = useState('Face ID');
+  const viewShotRef = React.useRef<any>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportData, setExportData] = useState<any>(null);
 
   useEffect(() => { 
     loadProfile(); 
@@ -75,7 +80,7 @@ export default function ProfileScreen() {
 
       // Fetch pre-calculated career stats
       const [{ data: userRec }, { data: batStat }, { data: bowlStat }, { data: fieldStat }] = await Promise.all([
-        (supabase.from('users') as any).select('matches_played').eq('id', user.id).maybeSingle(),
+        (supabase.from('users') as any).select('*').eq('id', user.id).maybeSingle(),
         (supabase.from('batting_career_stats') as any).select('*').eq('user_id', user.id).maybeSingle(),
         (supabase.from('bowling_career_stats') as any).select('*').eq('user_id', user.id).maybeSingle(),
         (supabase.from('fielding_career_stats') as any).select('*').eq('user_id', user.id).maybeSingle(),
@@ -89,12 +94,16 @@ export default function ProfileScreen() {
         runOuts: fieldStat?.run_outs ?? 0,
         stumpings: fieldStat?.stumpings ?? 0,
         matches: totalMatches ?? userRec?.matches_played ?? 0, 
+        wins: userRec?.matches_won ?? 0,
+        mvps: userRec?.mvps ?? 0,
         highestScore: batStat?.highest_score ?? 0, 
         fifties: batStat?.fifties ?? 0,
         bestBowlingWkts: bowlStat?.best_bowling_wickets ?? 0, 
         bestBowlingRuns: bowlStat?.best_bowling_runs ?? 0,
         sixes: batStat?.sixes ?? 0, 
         fours: batStat?.fours ?? 0,
+        strikeRate: batStat?.balls > 0 ? ((batStat?.runs || 0) / batStat.balls * 100).toFixed(1) : 0,
+        economy: bowlStat?.legal_balls > 0 ? ((bowlStat?.runs || 0) / (bowlStat.legal_balls / 6)).toFixed(1) : 0,
       });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -110,6 +119,24 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportData({ player: { name: userName, mvps: stats.mvps }, stats, daily: { date: new Date().toISOString() } });
+    setTimeout(async () => {
+      if (viewShotRef.current) {
+        try {
+          const uri = await viewShotRef.current.capture();
+          await Sharing.shareAsync(uri, { dialogTitle: 'Share Turf Titans Stats' });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      setExporting(false);
+      setExportData(null);
+    }, 500);
+  };
+
   if (loading) {
     return <LoadingScreen />;
   }
@@ -117,7 +144,73 @@ export default function ProfileScreen() {
   return (
     <View style={C.screen}>
       <StatusBar barStyle="dark-content" backgroundColor="#EDEBDE" />
-      <SafeAreaView style={C.safe}>
+
+      {/* Hidden ViewShot for Exporting Image */}
+      {exportData && (
+        <View style={{ position: 'absolute', top: 0, left: 0, zIndex: 100, transform: [{ translateX: 10000 }] }}>
+          <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1.0, result: 'tmpfile' }}>
+            <View style={{ width: 400, backgroundColor: '#0a0a0a', padding: 24, borderRadius: 20, borderColor: 'rgba(249,115,22, 0.4)', borderWidth: 2 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+                <View>
+                  <Text style={{ color: '#f97316', fontSize: 14, fontWeight: 'bold', letterSpacing: 2 }}>{exportData.player.name.toUpperCase()}</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 32, fontWeight: '900', fontFamily: 'Outfit_900Black', marginTop: 4 }}>PLAYER STATS</Text>
+                </View>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ fontSize: 32 }}>🏆</Text>
+                  <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 'bold', marginTop: 4 }}>{Array(exportData.player.mvps).fill('★').join('') || 'PLAYER'}</Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+                <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>MATCHES</Text>
+                  <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{exportData.stats.matches}</Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>WIN RATE</Text>
+                  <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>
+                    {exportData.stats.matches > 0 ? Math.round((exportData.stats.wins / exportData.stats.matches) * 100) : 0}%
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#30d158', paddingLeft: 8 }}>BATTING</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>RUNS</Text>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.runs}</Text>
+                </View>
+                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>STRIKE RATE</Text>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.strikeRate || 0}</Text>
+                </View>
+                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(48,209,88,0.1)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#30d158', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>BOUNDARIES</Text>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.fours}x4 / {exportData.stats.sixes}x6</Text>
+                </View>
+              </View>
+
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#f87171', paddingLeft: 8 }}>BOWLING</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(248,113,113,0.1)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#f87171', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>WICKETS</Text>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.wickets}</Text>
+                </View>
+                <View style={{ flexBasis: '47%', backgroundColor: 'rgba(248,113,113,0.1)', padding: 16, borderRadius: 16 }}>
+                  <Text style={{ color: '#f87171', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>ECONOMY</Text>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{exportData.stats.economy || 0}</Text>
+                </View>
+              </View>
+
+              <View style={{ alignItems: 'center', marginTop: 8 }}>
+                <Text style={{ color: '#f97316', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>POWERED BY ANTIGRAVITY</Text>
+              </View>
+            </View>
+          </ViewShot>
+        </View>
+      )}
+
+      <SafeAreaView style={[C.safe, { backgroundColor: '#EDEBDE', flex: 1 }]}>
         <ScrollView 
           showsVerticalScrollIndicator={false} 
           contentContainerStyle={{ paddingBottom: 40 }}
@@ -127,9 +220,14 @@ export default function ProfileScreen() {
           {/* Header */}
           <View style={C.headerRow}>
             <Text style={C.headerTitle}>Profile</Text>
-            <TouchableOpacity style={C.signOutBtn} onPress={handleSignOut}>
-              <Ionicons name="log-out-outline" size={20} color="#810100" />
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity style={C.signOutBtn} onPress={handleExport} disabled={exporting}>
+                {exporting ? <ActivityIndicator size="small" color="#810100" /> : <Ionicons name="share-outline" size={20} color="#810100" />}
+              </TouchableOpacity>
+              <TouchableOpacity style={C.signOutBtn} onPress={handleSignOut}>
+                <Ionicons name="log-out-outline" size={20} color="#810100" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Hero Card */}
@@ -143,7 +241,10 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
             <Text style={C.nameText}>{userName || 'Player'}</Text>
-            <Text style={C.emailText}>{user?.email}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={C.emailText}>{user?.email}</Text>
+              {stats.mvps > 0 && <Text style={{ marginLeft: 8, fontSize: 14, color: '#fbbf24', marginBottom: 16 }}>{Array(stats.mvps).fill('★').join('')}</Text>}
+            </View>
             <View style={C.heroDivider} />
             <View style={C.heroMiniStats}>
               <View style={C.heroMiniStat}>
