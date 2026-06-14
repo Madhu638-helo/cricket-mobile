@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserName(s.user.name || '');
     
     // Optionally fetch from players table if needed
-    const { data } = await supabase.from('players').select('name').eq('user_id', s.user.id).single();
+    const { data } = await (supabase.from('players') as any).select('name').eq('user_id', s.user.id).single();
     if (data?.name) {
       setUserName(data.name);
     }

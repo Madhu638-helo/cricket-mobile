@@ -31,7 +31,7 @@ export default function CreateMatchScreen() {
       const code = generateCode();
 
       // 1. Create session
-      const { data: sess, error: sessErr } = await supabase.from('sessions').insert({
+      const { data: sess, error: sessErr } = await (supabase.from('sessions') as any).insert({
         code,
         name: sessionName || `${team1} vs ${team2}`,
         status: 'active',
@@ -39,12 +39,12 @@ export default function CreateMatchScreen() {
       if (sessErr || !sess) throw new Error(sessErr?.message || 'Failed to create session');
 
       // 2. Create teams
-      const { data: t1 } = await supabase.from('teams').insert({ session_id: sess.id, name: team1 }).select().single();
-      const { data: t2 } = await supabase.from('teams').insert({ session_id: sess.id, name: team2 }).select().single();
+      const { data: t1 } = await (supabase.from('teams') as any).insert({ session_id: sess.id, name: team1 }).select().single();
+      const { data: t2 } = await (supabase.from('teams') as any).insert({ session_id: sess.id, name: team2 }).select().single();
       if (!t1 || !t2) throw new Error('Failed to create teams');
 
       // 3. Join as a player
-      await supabase.from('players').insert({
+      await (supabase.from('players') as any).insert({
         session_id: sess.id,
         user_id: user.id,
         name: userName || 'Owner',
@@ -54,7 +54,7 @@ export default function CreateMatchScreen() {
         team_id: t1.id });
 
       // 4. Create match
-      const { data: match } = await supabase.from('matches').insert({
+      const { data: match } = await (supabase.from('matches') as any).insert({
         session_id: sess.id,
         match_number: 1,
         status: 'setup',
@@ -150,7 +150,7 @@ const styles = StyleSheet.create({
   backText: { color: '#810100', fontSize: 22 },
   title: { color: '#111111', fontFamily: 'Outfit_400Regular', fontSize: 18 },
   content: { padding: 20, gap: 8 },
-  sectionlabel: { color: '#FFFFFF', fontFamily: 'Outfit_400Regular', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginTop: 12, marginBottom: 4 },
+  sectionLabel: { color: '#FFFFFF', fontFamily: 'Outfit_400Regular', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginTop: 12, marginBottom: 4 },
   input: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 14, color: '#111111', fontFamily: 'Outfit_400Regular', fontSize: 15, shadowColor: '#630102', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 2, borderWidth: 0 },
   oversRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginBottom: 4 },
   oversChip: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#FFFFFF', borderRadius: 10, shadowColor: '#630102', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 2, borderWidth: 0 },

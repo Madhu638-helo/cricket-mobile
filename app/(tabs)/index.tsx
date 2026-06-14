@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  TextInput, SafeAreaView, RefreshControl, StatusBar, Animated,
+  TextInput, SafeAreaView, RefreshControl, StatusBar, Animated, Alert
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -136,7 +136,7 @@ export default function HomeScreen() {
           overs: activeInn ? formatOvers(activeInn.total_balls) : '0.0', crr,
           target: activeInn?.target ?? 0,
         });
-      } else if (['toss', 'setup', 'lobby'].includes(m.status) || sess.status === 'lobby') {
+      } else if (['toss', 'setup', 'lobby'].includes(m.status)) {
         // lobby = session exists but match not started; toss/setup = match started config
         upcoming.push({
           id: m.id, code: sess.code, matchName: sess.name || `Match ${m.match_number}`,
@@ -270,6 +270,25 @@ export default function HomeScreen() {
   const onRefresh = async () => { setRefreshing(true); await loadDashboard(); setRefreshing(false); };
   const handleJoin = () => { if (joinCode.length >= 4) router.push(`/join?code=${joinCode}`); };
 
+  const handleAbandonMatch = (matchId: string) => {
+    Alert.alert(
+      'Abandon Match?',
+      'Are you sure you want to remove this match from your dashboard?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Remove', 
+          style: 'destructive',
+          onPress: async () => {
+            await (supabase.from('matches') as any).update({ status: 'abandoned' }).eq('id', matchId);
+            await (supabase.from('sessions') as any).update({ status: 'abandoned' }).eq('id', matchId);
+            loadDashboard();
+          }
+        }
+      ]
+    );
+  };
+
   return (
     <View style={C.screen}>
       <StatusBar barStyle="light-content" backgroundColor="#810100" />
@@ -372,7 +391,8 @@ export default function HomeScreen() {
             ) : (
               liveMatches.map(m => (
                 <TouchableOpacity key={m.id} style={C.liveCard} activeOpacity={0.85}
-                  onPress={() => router.push(`/match/${m.code}`)}>
+                  onPress={() => router.push(`/match/${m.code}`)}
+                  onLongPress={() => handleAbandonMatch(m.id)}>
                   <View style={C.liveCardTop}>
                     <View style={C.liveRow}>
                       <LiveDot />
@@ -427,7 +447,8 @@ export default function HomeScreen() {
               ) : (
                 upcomingMatches.map(m => (
                   <TouchableOpacity key={m.id} style={C.upcomingCard} activeOpacity={0.85}
-                    onPress={() => router.push(`/match/${m.code}/lobby`)}>
+                    onPress={() => router.push(`/match/${m.code}/lobby`)}
+                    onLongPress={() => handleAbandonMatch(m.id)}>
                     <View style={C.upcomingIcon}>
                       <Text style={{ fontSize: 20 }}>{m.status === 'Toss' ? '🪙' : m.status === 'Lobby' ? '⏳' : '⚙️'}</Text>
                     </View>
@@ -509,6 +530,48 @@ export default function HomeScreen() {
           </View>
 
           <View style={{ height: 24 }} />
+
+          {/* ── CHAMPIONS ── */}
+          <View style={C.section}>
+            <View style={C.sectionHeader}>
+              <Text style={C.sectionLabel}>CHAMPIONS (ALL-TIME)</Text>
+            </View>
+            <View style={{ gap: 8 }}>
+              {/* Gold / 1st Place */}
+              <View style={[C.matchRow, { borderLeftWidth: 4, borderLeftColor: '#fbbf24', marginBottom: 0 }]}>
+                <View style={[C.matchIconBox, { backgroundColor: 'rgba(251,191,36,0.15)' }]}>
+                  <Text style={{ fontSize: 20 }}>🏆</Text>
+                </View>
+                <View style={C.matchInfo}>
+                  <Text style={[C.matchName, { fontSize: 16 }]}>Turf Titans</Text>
+                  <Text style={C.matchCode}>1st Place</Text>
+                </View>
+                <View style={[C.matchBadge, { backgroundColor: 'rgba(251,191,36,0.1)' }]}>
+                  <Text style={[C.matchBadgeText, { color: '#b45309', fontSize: 14 }]}>
+                    6 WINS
+                  </Text>
+                </View>
+              </View>
+
+              {/* Silver / 2nd Place */}
+              <View style={[C.matchRow, { borderLeftWidth: 4, borderLeftColor: '#94a3b8', marginBottom: 0 }]}>
+                <View style={[C.matchIconBox, { backgroundColor: 'rgba(148,163,184,0.15)' }]}>
+                  <Text style={{ fontSize: 20 }}>🥈</Text>
+                </View>
+                <View style={C.matchInfo}>
+                  <Text style={[C.matchName, { fontSize: 16 }]}>Titan Smashers</Text>
+                  <Text style={C.matchCode}>2nd Place</Text>
+                </View>
+                <View style={[C.matchBadge, { backgroundColor: 'rgba(148,163,184,0.1)' }]}>
+                  <Text style={[C.matchBadgeText, { color: '#475569', fontSize: 14 }]}>
+                    4 WINS
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          <View style={{ height: 40 }} />
         </View>
       </Animated.ScrollView>
     </View>
@@ -611,5 +674,14 @@ const C = StyleSheet.create({
   statChip: { backgroundColor: '#FFFFFF', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center', borderWidth: 1, shadowColor: '#1B1716', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 1 },
   statChipValue: { fontSize: 22, fontFamily: 'Outfit_900Black', lineHeight: 26, marginBottom: 2 },
   statChipLabel: { fontSize: 9, color: '#9A9390', fontFamily: 'Outfit_700Bold', textTransform: 'uppercase', letterSpacing: 0.8 },
+
+  // Match Row (for Champions)
+  matchRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, gap: 12, marginBottom: 8, shadowColor: '#1B1716', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 1 },
+  matchIconBox: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#EDEBDE', alignItems: 'center', justifyContent: 'center' },
+  matchInfo: { flex: 1 },
+  matchName: { color: '#1B1716', fontSize: 14, fontFamily: 'Outfit_700Bold', marginBottom: 2 },
+  matchCode: { color: '#9A9390', fontSize: 12, fontFamily: 'Outfit_600SemiBold', letterSpacing: 1 },
+  matchBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
+  matchBadgeText: { fontSize: 11, fontFamily: 'Outfit_800ExtraBold', textTransform: 'uppercase', letterSpacing: 0.5 },
 });
 

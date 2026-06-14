@@ -8,9 +8,10 @@ export default {
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'dark',
-    ios: { 
-      supportsTablet: true, 
+    ios: {
+      supportsTablet: true,
       bundleIdentifier: 'com.turf.cricket',
+      buildNumber: '10',
       config: {
         usesNonExemptEncryption: false
       }

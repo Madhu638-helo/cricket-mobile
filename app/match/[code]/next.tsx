@@ -148,7 +148,7 @@ const styles = StyleSheet.create({
   title: { color: '#111111', fontFamily: 'Outfit_400Regular', fontSize: 18 },
   content: { padding: 20, gap: 16 },
   infoText: { color: '#aaa', fontSize: 14, lineHeight: 20, marginBottom: 12 },
-  sectionlabel: { color: '#FFFFFF', fontFamily: 'Outfit_400Regular', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 },
+  sectionLabel: { color: '#FFFFFF', fontFamily: 'Outfit_400Regular', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 },
   oversRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginBottom: 16 },
   oversChip: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#FFFFFF', borderRadius: 10, shadowColor: '#630102', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 2, borderWidth: 0 },
   oversChipActive: { backgroundColor: 'rgba(129, 1, 0, 0.1)', borderColor: '#E5E5EA' },

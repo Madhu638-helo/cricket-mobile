@@ -63,6 +63,7 @@ export function useRealtimeMatch(matchCode: string): RealtimeMatchData {
 
     const { data: m } = await (supabase
       .from('matches').select('*').eq('session_id', sess.id)
+      .neq('status', 'abandoned')
       .order('match_number', { ascending: false }).limit(1).single() as any);
     if (!m) { setSession(sess); setLoading(false); return; }
 
